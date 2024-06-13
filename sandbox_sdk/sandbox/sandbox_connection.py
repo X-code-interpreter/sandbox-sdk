@@ -1,0 +1,423 @@
+import concurrent
+import concurrent.futures
+import logging
+import threading
+import traceback
+import warnings
+import uuid
+
+from concurrent.futures import ThreadPoolExecutor, CancelledError
+from time import sleep
+from typing import Any, Callable, List, Literal, Optional, Union, Dict
+from datetime import datetime
+from pydantic import BaseModel
+import grpc
+from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
+
+from sandbox_sdk.api import (
+    OrchestratorClient,
+    SandboxCreateRequest,
+    SandboxConfig,
+    SandboxListResponse,
+    SandboxRequest,
+)
+from sandbox_sdk.constants import (
+    BACKEND_ADDR,
+    SANDBOX_PORT,
+    TIMEOUT,
+    ENVD_PORT,
+    WS_ROUTE,
+    SECURE,
+    ORCHESTRATOR_PORT,
+    GUEST_KERNEL_VERSION,
+)
+from sandbox_sdk.sandbox.env_vars import EnvVars
+from sandbox_sdk.sandbox.exception import (
+    MultipleExceptions,
+    SandboxException,
+    TimeoutException,
+    SandboxNotOpenException,
+)
+from sandbox_sdk.sandbox.sandbox_rpc import Notification, SandboxRpc
+from sandbox_sdk.utils.future import DeferredFuture
+from sandbox_sdk.utils.str import camel_case_to_snake_case
+
+logger = logging.getLogger(__name__)
+
+
+class SandboxMeta(BaseModel):
+    sandbox_id: str
+    template_id: str
+    kernel_version: str
+    max_instance_length: int
+    metadata: dict[str, str]
+
+
+class Subscription(BaseModel):
+    service: str
+    id: str
+    handler: Callable[[Any], None]
+
+
+class SubscriptionArgs(BaseModel):
+    service: str
+    handler: Callable[[Any], None]
+    method: str
+    params: List[Any] = []
+
+
+class RunningSandbox(BaseModel):
+    sandbox_id: str
+    template_id: str
+    # alias: Optional[str]
+    metadata: Optional[Dict[str, str]]
+    # cpu_count: int
+    # memory_mb: int
+    started_at: datetime
+
+
+class SandboxConnection:
+    _on_close_child: Optional[Callable[[], Any]] = None
+
+    @property
+    def id(self) -> str:
+        """
+        The sandbox ID.
+
+        You can use this ID to reconnect to the sandbox later.
+        """
+        if not self._sandbox:
+            raise SandboxException("Sandbox is not running.")
+        return self._sandbox.sandbox_id
+
+    @property
+    def finished(self):
+        """
+        A future that is resolved when the sandbox exits.
+        """
+        return self._finished
+
+    @property
+    def is_open(self) -> bool:
+        """
+        Whether the sandbox is open.
+        """
+        return self._is_open
+
+    def __init__(
+        self,
+        template: str,
+        cwd: Optional[str] = None,
+        env_vars: Optional[EnvVars] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = TIMEOUT,
+        target_addr: Optional[str] = None,
+        sandbox_port: Optional[str] = None,
+        secure: bool = False,  # whether enable SSL
+    ):
+        self.cwd = cwd
+        """
+        Default working directory used in the sandbox.
+
+        You can change the working directory by setting the `cwd` property.
+        """
+        self.env_vars = env_vars or {}
+        """
+        Default environment variables used in the sandbox.
+
+        You can change the environment variables by setting the `env_vars` property.
+        """
+        self._template = template
+        self._target_addr = target_addr or BACKEND_ADDR
+        self._sandbox_port = sandbox_port or SANDBOX_PORT
+
+        self._is_open = False
+        self._process_cleanup: List[Callable[[], Any]] = []
+        self._subscribers = {}
+        self._rpc: Optional[SandboxRpc] = None
+        self._finished = DeferredFuture(self._process_cleanup)
+        self._secure = secure
+        self._sandbox: Optional[SandboxMeta] = None
+
+        logger.info(f"Sandbox for template {self._template} initialized")
+
+        self._open(metadata=metadata, timeout=timeout)
+
+    def get_sbx_url(self, port: Optional[int] = None) -> str:
+        """
+        Get the url for the sandbox or for the specified sandbox's port.
+
+        :param port: Specify if you want to connect to a specific port within the sandbox
+
+        :return: Hostname of the sandbox or sandbox's port
+        """
+
+        if not self._sandbox:
+            raise SandboxException("Sandbox is not running.")
+
+        url = f"{self._target_addr}:{self._sandbox_port}/{self._sandbox.sandbox_id}"
+
+        if port:
+            url += f"/{port}"
+
+        return url
+
+    @staticmethod
+    def get_protocol(base_protocol: str = "http", secure: bool = SECURE) -> str:
+        """
+        The function decides whether to use the secure or insecure protocol.
+
+        :param base_protocol: Specify the specific protocol you want to use. Do not include the `s` in `https` or `wss`.
+        :param secure: Specify whether you want to use the secure protocol or not.
+
+        :return: Protocol for the connection to the sandbox
+        """
+        return f"{base_protocol}s" if secure else base_protocol
+
+    def close(self) -> None:
+        """
+        Close the sandbox and unsubscribe from all the subscriptions.
+        """
+        self._close()
+        logger.info(f"Sandbox closed")
+
+    def _close(self):
+        if self._is_open and self._sandbox:
+            logger.info(
+                f"Closing sandbox {self._sandbox.template_id} (id: {self._sandbox.sandbox_id})"
+            )
+            self._is_open = False
+            if self._rpc:
+                self._rpc.close()
+
+        if self._on_close_child:
+            self._on_close_child()
+
+        for cleanup in self._process_cleanup:
+            cleanup()
+        self._process_cleanup.clear()
+
+    def _open(
+        self,
+        metadata: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = TIMEOUT,
+    ) -> None:
+        """
+        Open a connection to a new sandbox.
+
+        You must call this method before using the sandbox.
+        """
+        if self._is_open:
+            raise SandboxException("Sandbox connect was already called")
+        else:
+            self._is_open = True
+
+        sandbox_id = str(uuid.uuid4())
+        sandbox_config = SandboxConfig(
+            templateID=self._template,
+            kernelVersion=GUEST_KERNEL_VERSION,
+            maxInstanceLength=3,
+            sandboxID=sandbox_id,
+            metadata=metadata,
+        )
+        try:
+            # connect to the orchestrator (a grpc service)
+            orchestrator_client = OrchestratorClient(
+                f"{self._target_addr}:{ORCHESTRATOR_PORT}"
+            )
+            req = SandboxCreateRequest(sandbox=sandbox_config)
+            res = orchestrator_client.Create(req, timeout=timeout)
+        except grpc.RpcError as e:
+            logger.error(f"failed to create a sandbox: {e}")
+            self._close()
+            raise e
+        except Exception as e:
+            logger.error(f"Failed to acquire sandbox")
+            self._close()
+            raise e
+        orchestrator_client.close()
+        logger.info(f"Sandbox {self._template} created")
+        self._sandbox = SandboxMeta(
+            sandbox_id=sandbox_id,
+            template_id=sandbox_config.templateID,
+            kernel_version=sandbox_config.kernelVersion,
+            metadata=metadata if metadata else {},
+            max_instance_length=sandbox_config.maxInstanceLength,
+        )
+
+        # TODO(huang-jl): add something like refresh as e2b?
+
+        try:
+            self._connect_rpc(timeout)
+        except Exception as e:
+            logger.error(e)
+            self._close()
+            raise e
+
+    def _connect_rpc(self, timeout: Optional[float] = TIMEOUT):
+        if not self._sandbox:
+            raise SandboxException("Sandbox is not running.")
+        protocol = self.get_protocol("ws", self._secure)
+        sbx_main_url = self.get_sbx_url(ENVD_PORT)
+        sandbox_url = f"{protocol}://{sbx_main_url}{WS_ROUTE}"
+
+        logger.debug(f"connect rpc with url {sandbox_url}")
+
+        self._rpc = SandboxRpc(
+            url=sandbox_url,
+            on_message=self._handle_notification,
+        )
+        self._rpc.connect(timeout=timeout)
+
+    def _call(
+        self,
+        service: str,
+        method: str,
+        params: Optional[List[Any]] = None,
+        timeout: Optional[float] = TIMEOUT,
+    ) -> Any:
+        if not params:
+            params = []
+
+        if not self.is_open:
+            raise SandboxNotOpenException("Sandbox is not open")
+
+        if not self._rpc:
+            raise SandboxException("Sandbox is not connected")
+
+        return self._rpc.send_message(f"{service}_{method}", params, timeout)
+
+    def _handle_subscriptions(
+        self,
+        *subscription_args: SubscriptionArgs,
+    ):
+        results: List[Union[Callable, None, Exception]] = []
+        with ThreadPoolExecutor(thread_name_prefix="process-subscribe") as executor:
+            futures = []
+            for args in subscription_args:
+                future = executor.submit(
+                    self._subscribe,
+                    args.service,
+                    args.handler,
+                    args.method,
+                    *args.params,
+                )
+                futures.append(future)
+
+            for future in concurrent.futures.as_completed(futures):
+                results.append(future.result())
+
+        results = [sub for sub in results if sub]
+        process_exceptions = [e for e in results if isinstance(e, Exception)]
+
+        def unsub_all():
+            def unsub_func():
+                for unsub in results:
+                    if not isinstance(unsub, Exception):
+                        try:
+                            unsub()
+                        except (CancelledError, SandboxNotOpenException, KeyError):
+                            pass
+
+            threading.Thread(
+                name="process-unsubscribe",
+                daemon=True,
+                target=unsub_func,
+            ).start()
+
+        if len(process_exceptions) > 0:
+            unsub_all()
+
+            if len(process_exceptions) == 1:
+                raise process_exceptions[0]
+
+            error_message = "\n"
+
+            for i, s in enumerate(process_exceptions):
+                tb = s.__traceback__  # Get the traceback object
+                stack_trace = "\n".join(traceback.extract_tb(tb).format())
+                error_message += f'\n[{i}]: {type(s).__name__}("{s}"):\n{stack_trace}\n'
+
+            raise MultipleExceptions(
+                message=error_message,
+                exceptions=process_exceptions,
+            )
+
+        return unsub_all
+
+    def _unsubscribe(self, sub_id: str, timeout: Optional[float] = TIMEOUT):
+        sub = self._subscribers[sub_id]
+        self._call(sub.service, "unsubscribe", [sub.id], timeout=timeout)
+        del self._subscribers[sub_id]
+        logger.debug(f"Unsubscribed (sub_id: {sub_id})")
+
+    def _subscribe(
+        self,
+        service: str,
+        handler: Callable[[Any], Any],
+        method: str,
+        *params,
+        timeout: Optional[float] = TIMEOUT,
+    ) -> Callable[[], None]:
+        sub_id = self._call(service, "subscribe", [method, *params], timeout=timeout)
+        if not isinstance(sub_id, str):
+            raise Exception(f"Failed to subscribe: {camel_case_to_snake_case(method)}")
+
+        self._subscribers[sub_id] = Subscription(
+            service=service, id=sub_id, handler=handler
+        )
+        logger.debug(
+            f"Subscribed to {service} {camel_case_to_snake_case(method)} (sub id: {sub_id})"
+        )
+
+        def unsub():
+            self._unsubscribe(sub_id, timeout=timeout)
+
+        return unsub
+
+    def _handle_notification(self, data: Notification):
+        logger.debug(f"Notification {data}")
+
+        for id, sub in self._subscribers.items():
+            if id == data.params["subscription"]:
+                sub.handler(data.params["result"])
+
+    @staticmethod
+    def list(target_addr: str = BACKEND_ADDR) -> List[RunningSandbox]:
+        """
+        List all running sandboxes.
+
+        :param api_key: API key to use for authentication.
+        :param domain: Domain to use for the API.
+        If not provided, the `E2B_API_KEY` environment variable will be used.
+        """
+        with OrchestratorClient(
+            f"{target_addr}:{ORCHESTRATOR_PORT}"
+        ) as orchestrator_client:
+            req = google_dot_protobuf_dot_empty__pb2.Empty()
+            res: SandboxListResponse = orchestrator_client.List(req)
+            return [
+                RunningSandbox(
+                    sandbox_id=sbx.config.sandboxID,
+                    template_id=sbx.config.templateID,
+                    started_at=sbx.startTime.ToDatetime(),
+                    metadata=dict(sbx.config.metadata),
+                )
+                for sbx in res.sandboxes
+            ]
+
+    @staticmethod
+    def kill(sandbox_id: str, target_addr: str = BACKEND_ADDR) -> None:
+        """
+        Kill the running sandbox specified by the sandbox ID.
+
+        :param sandbox_id: ID of the sandbox to kill.
+        :param api_key: API key to use for authentication.
+        :param domain: Domain to use for the API.
+        If not provided, the `E2B_API_KEY` environment variable will be used.
+        """
+        with OrchestratorClient(
+            f"{target_addr}:{ORCHESTRATOR_PORT}"
+        ) as orchestrator_client:
+            reqpc = SandboxRequest(sandboxID=sandbox_id)
+            _ = orchestrator_client.Delete(reqpc)
