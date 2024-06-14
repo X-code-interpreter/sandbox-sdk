@@ -13,6 +13,9 @@ from .sandbox import (
     Terminal,
     ProcessManager,
     Process,
+    EnvVars,
+    ProcessMessage,
 )
 
-from .constants import BACKEND_ADDR
+from .constants import BACKEND_ADDR, SANDBOX_PORT
+from . import code_interpreter

@@ -5,8 +5,8 @@ SANDBOX_REFRESH_PERIOD = 5  # seconds
 TIMEOUT = 60
 
 
-SECURE = os.getenv("E2B_SECURE", "TRUE").upper() == "TRUE"
-DEBUG = os.getenv("E2B_DEBUG") or False
+SECURE = os.getenv("SANDBOX_SDK_SECURE", "FALSE").upper() == "TRUE"
+DEBUG = os.getenv("SANDBOX_SDK_DEBUG") or False
 PROTOCOL = "https" if SECURE and not DEBUG else "http"
 
 
