@@ -1,45 +1,50 @@
 from sandbox_sdk import Sandbox
+from .utils import asyncio_run
 
 
-def test_env_vars():
-    sandbox = Sandbox()
+@asyncio_run
+async def test_env_vars():
+    sandbox = await Sandbox.create()
 
-    process = sandbox.process.start("echo $FOO", env_vars={"FOO": "BAR"})
-    process.wait()
+    process = await sandbox.process.start("echo $FOO", env_vars={"FOO": "BAR"})
+    await process.wait()
     output = process.stdout
     assert output == "BAR"
 
-    sandbox.close()
+    await sandbox.close()
 
 
-def test_profile_env_vars():
-    sandbox = Sandbox()
+@asyncio_run
+async def test_profile_env_vars():
+    sandbox = await Sandbox.create()
 
-    sandbox.filesystem.write("/home/user/.profile", "export FOO=BAR")
-    process = sandbox.process.start("echo $FOO")
-    process.wait()
+    await sandbox.filesystem.write("/home/user/.profile", "export FOO=BAR")
+    process = await sandbox.process.start("echo $FOO")
+    await process.wait()
     output = process.stdout
     assert output == "BAR"
 
-    sandbox.close()
+    await sandbox.close()
 
 
-def test_default_env_vars():
-    sandbox = Sandbox(env_vars={"FOO": "BAR"})
-    process = sandbox.process.start("echo $FOO")
-    process.wait()
+@asyncio_run
+async def test_default_env_vars():
+    sandbox = await Sandbox.create(env_vars={"FOO": "BAR"})
+    process = await sandbox.process.start("echo $FOO")
+    await process.wait()
     output = process.stdout
     assert output == "BAR"
 
-    sandbox.close()
+    await sandbox.close()
 
 
-def test_overriding_env_vars():
-    sandbox = Sandbox(env_vars={"FOO": "BAR"})
+@asyncio_run
+async def test_overriding_env_vars():
+    sandbox = await Sandbox.create(env_vars={"FOO": "BAR"})
 
-    process = sandbox.process.start("echo $FOO", env_vars={"FOO": "QUX"})
-    process.wait()
+    process = await sandbox.process.start("echo $FOO", env_vars={"FOO": "QUX"})
+    await process.wait()
     output = process.stdout
     assert output == "QUX"
 
-    sandbox.close()
+    await sandbox.close()

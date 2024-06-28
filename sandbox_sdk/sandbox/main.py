@@ -1,10 +1,10 @@
+import asyncio
 import logging
 import urllib.parse
-import requests
-import threading
+import aiohttp
 
 from os import path
-from typing import Any, Callable, Dict, List, Literal, Optional, IO, TypeVar, Union
+from typing import Any, Callable, Dict, List, Optional, IO, TypeVar, Union
 from typing_extensions import Self
 
 from sandbox_sdk.constants import TIMEOUT, ENVD_PORT, FILE_ROUTE, BACKEND_ADDR
@@ -63,9 +63,10 @@ class Sandbox(SandboxConnection):
         """
         return self._filesystem
 
-    def __init__(
-        self,
-        template: str = "default-code-interpreter",
+    @classmethod
+    async def create(
+        cls,
+        template: str = "default-sandbox",
         cwd: Optional[str] = None,
         env_vars: Optional[EnvVars] = None,
         on_scan_ports: Optional[Callable[[List[OpenPort]], Any]] = None,
@@ -96,12 +97,33 @@ class Sandbox(SandboxConnection):
         :param timeout: Timeout for sandbox to initialize in seconds, default is 60 seconds
         :param target_addr: The address to use for the API
         """
-
-        template = template or "base"
-
         logger.info(
             f"Creating sandbox {template if isinstance(template, str) else type(template)}"
         )
+        obj = cls(
+            template=template,
+            cwd=cwd,
+            env_vars=env_vars,
+            on_scan_ports=on_scan_ports,
+            on_stdout=on_stdout,
+            on_stderr=on_stderr,
+            on_exit=on_exit,
+            target_addr=target_addr,
+        )
+        await obj._open(metadata=metadata, timeout=timeout)
+        return obj
+
+    def __init__(
+        self,
+        template: str,
+        cwd: Optional[str] = None,
+        env_vars: Optional[EnvVars] = None,
+        on_scan_ports: Optional[Callable[[List[OpenPort]], Any]] = None,
+        on_stdout: Optional[Callable[[ProcessMessage], Any]] = None,
+        on_stderr: Optional[Callable[[ProcessMessage], Any]] = None,
+        on_exit: Optional[Union[Callable[[int], Any], Callable[[], Any]]] = None,
+        target_addr: str = BACKEND_ADDR,
+    ):
         if cwd and cwd.startswith("~"):
             cwd = cwd.replace("~", "/home/user")
 
@@ -130,12 +152,11 @@ class Sandbox(SandboxConnection):
                 **default_env_vars,
                 **(env_vars or {}),
             },
-            metadata=metadata,
-            timeout=timeout,
             target_addr=target_addr,
             secure=False,
         )
         self._actions: Dict[str, Action[Self]] = {}
+        self._http_client = aiohttp.ClientSession()
 
     def add_action(self, action: Action[Self], name: Optional[str] = None) -> "Sandbox":
         """
@@ -220,15 +241,17 @@ class Sandbox(SandboxConnection):
     #     return OpenAI[Self](Actions[Self](self))
 
     def _handle_start_cmd_logs(self):
-        def run_in_thread():
-            self.process.start(
-                "sudo journalctl --follow --lines=all -o cat _SYSTEMD_UNIT=start_cmd.service",
+        async def start_cmd_monitor():
+            cmd = "sudo journalctl --follow --lines=all -o cat _SYSTEMD_UNIT=start_cmd.service"
+            p = await self.process.start(
+                cmd,
                 cwd="/",
                 env_vars={},
             )
+            await p.wait()
 
-        thread = threading.Thread(target=run_in_thread)
-        thread.start()
+        t = asyncio.create_task(start_cmd_monitor())
+        self._bg_tasks.append(t)
 
     # @classmethod
     # def reconnect(
@@ -292,7 +315,7 @@ class Sandbox(SandboxConnection):
     #         ),
     #     )
 
-    def _open(
+    async def _open(
         self,
         metadata: Optional[Dict[str, str]] = None,
         timeout: Optional[float] = TIMEOUT,
@@ -303,12 +326,12 @@ class Sandbox(SandboxConnection):
         :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out (default is 60 seconds). If set to None, the method will continue to wait until it completes, regardless of time
         """
         logger.info(f"Opening sandbox {self._template}")
-        super()._open(metadata=metadata, timeout=timeout)
-        self._code_snippet._subscribe()
+        await super()._open(metadata=metadata, timeout=timeout)
+        await self._code_snippet._subscribe()
         logger.info(f"Sandbox {self._template} opened")
 
         if self.cwd:
-            self.filesystem.make_dir(self.cwd)
+            await self.filesystem.make_dir(self.cwd)
 
         if self._on_stderr or self._on_stdout:
             self._handle_start_cmd_logs()
@@ -327,7 +350,7 @@ class Sandbox(SandboxConnection):
 
         return file_url
 
-    def upload_file(self, file: IO, timeout: Optional[float] = TIMEOUT) -> str:
+    async def upload_file(self, file: IO, timeout: Optional[float] = TIMEOUT) -> str:
         """
         Upload a file to the sandbox.
         The file will be uploaded to the user's home (`/home/user`) directory with the same name.
@@ -337,14 +360,17 @@ class Sandbox(SandboxConnection):
         :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out (default is 60 seconds). If set to None, the method will continue to wait until it completes, regardless of time
         """
         files = {"file": file}
-        r = requests.post(self.file_url(), files=files, timeout=timeout)
-        if r.status_code != 200:
-            raise Exception(f"Failed to upload file: {r.reason} {r.text}")
+        async with self._http_client.post(
+            self.file_url(), data=files, timeout=timeout
+        ) as r:
+            if r.status != 200:
+                text = await r.text()
+                raise Exception(f"Failed to upload file: {r.reason} {text}")
 
         filename = path.basename(file.name)
         return f"/home/user/{filename}"
 
-    def download_file(
+    async def download_file(
         self, remote_path: str, timeout: Optional[float] = TIMEOUT
     ) -> bytes:
         """
@@ -355,16 +381,29 @@ class Sandbox(SandboxConnection):
         """
         encoded_path = urllib.parse.quote(remote_path)
         url = f"{self.file_url()}?path={encoded_path}"
-        r = requests.get(url, timeout=timeout)
+        async with self._http_client.get(url, timeout=timeout) as r:
+            if r.status != 200:
+                raise Exception(
+                    f"Failed to download file '{remote_path}'. {r.reason} {r.text}"
+                )
+            return await r.read()
 
-        if r.status_code != 200:
-            raise Exception(
-                f"Failed to download file '{remote_path}'. {r.reason} {r.text}"
-            )
-        return r.content
+    def deactive(self, timeout: Optional[float] = TIMEOUT):
+        """
+        Demote the memory of the sandbox to lower level (e.g., swap).
+        This can increase the density of sandboxes on the server.
 
-    def __enter__(self):
+        :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out (default is 60 seconds). If set to None, the method will continue to wait until it completes, regardless of time
+        """
+        pass
+
+    async def __aenter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
+    async def close(self):
+        await super().close()
+        await self._http_client.close()
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        await self.close()
+        return False

@@ -1,15 +1,17 @@
 from sandbox_sdk import Sandbox
+from .utils import asyncio_run
 
 
-def test_list_running_sandboxes():
+@asyncio_run
+async def test_list_running_sandboxes():
     sandboxes = []
     for i in range(3):
-        sandboxes.append(Sandbox(metadata={"n": f"py{i}"}))
+        sandboxes.append(await Sandbox.create(metadata={"n": f"py{i}"}))
 
     running_sandboxes = list(
         filter(
             lambda s: s.metadata and s.metadata.get("n", "").startswith("py"),
-            Sandbox.list(),
+            await Sandbox.list(),
         )
     )
     assert len(running_sandboxes) == 3
@@ -20,4 +22,4 @@ def test_list_running_sandboxes():
     }
 
     for sandbox in sandboxes:
-        sandbox.close()
+        await sandbox.close()

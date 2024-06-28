@@ -18,3 +18,18 @@ class OrchestratorClient(SandboxStub):
     
     def close(self):
         self._channel.close()
+
+class AsyncOrchestratorClient(SandboxStub):
+    def __init__(self, url: str):
+        channel = grpc.aio.insecure_channel(url)
+        self._channel = channel
+        super().__init__(channel)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+    
+    async def close(self):
+        await self._channel.close()

@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
-import time
 
-from concurrent.futures import TimeoutError
-from queue import Queue
-from threading import Event
+import asyncio
+from asyncio import Future
+
 from typing import Any, Callable, Dict, Iterator, List, Union, Optional
 from jsonrpcclient import Error, Ok, request_json
 from jsonrpcclient.id_generators import decimal as decimal_id_generator
@@ -16,9 +14,12 @@ from pydantic import BaseModel, PrivateAttr, ConfigDict
 from websockets.typing import Data
 
 from sandbox_sdk.constants import TIMEOUT
-from sandbox_sdk.sandbox.exception import RpcException, TimeoutException, SandboxException
+from sandbox_sdk.sandbox.exception import (
+    RpcException,
+    TimeoutException,
+    SandboxException,
+)
 from sandbox_sdk.sandbox.websocket_client import WebSocket
-from sandbox_sdk.utils.future import DeferredFuture
 
 logger = logging.getLogger(__name__)
 
@@ -58,95 +59,69 @@ class SandboxRpc(BaseModel):
     on_message: Callable[[Notification], None]
 
     _id_generator: Iterator[int] = PrivateAttr(default_factory=decimal_id_generator)
-    _waiting_for_replies: Dict[int, DeferredFuture] = PrivateAttr(default_factory=dict)
-    _queue_in: Queue = PrivateAttr(default_factory=Queue)
-    _queue_out: Queue = PrivateAttr(default_factory=Queue)
-    _process_cleanup: List[Callable[[], Any]] = PrivateAttr(default_factory=list)
-    _websocket_task: Optional[threading.Thread] = PrivateAttr(default=None)
-    _closed: bool = PrivateAttr(default=False)
+    _waiting_for_replies: Dict[int, Future] = PrivateAttr(default_factory=dict)
+    _websocket: Optional[WebSocket] = None
+    _bg_tasks: List[asyncio.Task] = []
 
-    def process_messages(self):
-        while True:
-            data = self._queue_out.get()
-            logger.debug(f"WebSocket received message: {data}".strip())
-            self._receive_message(data)
-            self._queue_out.task_done()
+    async def process_messages(self):
+        if not self._websocket:
+            raise SandboxException(f"WebSocket has not been started")
+        async for msg in self._websocket:
+            logger.debug(f"WebSocket received message: {msg[:1000]}".strip())
+            self._handle_recv_message(msg)
 
-    def connect(self, timeout: float = TIMEOUT):
-        started = Event()
-        stopped = Event()
-        self._process_cleanup.append(stopped.set)
-
-        threading.Thread(
-            target=self.process_messages, daemon=True, name="e2b-process-messages"
-        ).start()
-
-        threading.Thread(
-            target=WebSocket(
-                url=self.url,
-                queue_in=self._queue_in,
-                queue_out=self._queue_out,
-                started=started,
-                stopped=stopped,
-            ).run,
-            daemon=True,
-            name="e2b-websocket",
-        ).start()
-
-        logger.info("WebSocket waiting to start")
-
+    async def connect(self, timeout: Optional[float] = TIMEOUT):
         try:
-            start_time = time.time()
-            while (
-                not started.is_set()
-                and time.time() - start_time < timeout
-                and not self._closed
-            ):
-                time.sleep(0.1)
+            await asyncio.wait_for(self._connect(), timeout)
+        except asyncio.TimeoutError as e:
+            raise TimeoutException(f"sandbox rpc connect timeout: {e}") from e
 
-            if not started.is_set():
-                logger.error("WebSocket failed to start")
-                raise TimeoutException("WebSocket failed to start")
-        except BaseException as e:
-            self.close()
+    async def _connect(self):
+        self._websocket = WebSocket(self.url)
+        try:
+            await self._websocket.connect()
+        except Exception as e:
             raise SandboxException(f"WebSocket failed to start: {e}") from e
+        # spawn a task in the background to handle the received messages
+        t = asyncio.create_task(
+            self.process_messages(), name="sandbox rpc process message"
+        )
+        self._bg_tasks.append(t)
 
-        logger.info("WebSocket started")
-
-    def send_message(
-        self,
-        method: str,
-        params: List[Any],
-        timeout: Optional[float],
-    ) -> Any:
-        timeout = timeout or TIMEOUT
-
+    async def _send_rpc(self, method: str, params: List[Any]) -> Any:
+        """Send rpc through websocket:
+        1. send the request
+        2. wait until the response has arrived
+        """
+        if not self._websocket:
+            raise SandboxException(f"WebSocket has not been started")
         id = next(self._id_generator)
         request = request_json(method, params, id)
-        future_reply = DeferredFuture(self._process_cleanup)
-
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        self._waiting_for_replies[id] = fut
         try:
-            self._waiting_for_replies[id] = future_reply
-            logger.debug(f"WebSocket queueing message: {request}")
-            self._queue_in.put(request)
-            logger.debug(f"WebSocket waiting for reply: {request}")
-            try:
-                r = future_reply.result(timeout=timeout)
-            except TimeoutError as e:
-                logger.error(f"WebSocket timed out while waiting for: {request} {e}")
-                raise TimeoutException(
-                    f"WebSocket timed out while waiting for: {request} {e}"
-                ) from e
-            return r
+            await self._websocket.send(request)
+            reply = await fut
         except Exception as e:
             logger.error(f"WebSocket received error while waiting for: {request} {e}")
             raise e
         finally:
             del self._waiting_for_replies[id]
-            logger.debug(f"WebSocket removed waiting handler for {id}")
+        return reply
 
-    def _receive_message(self, data: Data):
-        logger.debug(f"Processing message: {data}".strip())
+    async def send_rpc(self, method: str, params: List[Any], timeout: Optional[float]) -> Any:
+        try:
+            reply = await asyncio.wait_for(self._send_rpc(method, params), timeout)
+        except asyncio.TimeoutError as e:
+            logger.error(f"WebSocket timed out while send rpc: {method} {e}")
+            raise TimeoutException(
+                f"WebSocket timed out while send rpc: {method} {e}"
+            ) from e
+        return reply
+
+    def _handle_recv_message(self, data: Data):
+        logger.debug(f"Processing received message: {data[:1000]}".strip())
 
         message = to_response_or_notification(json.loads(data))
 
@@ -158,14 +133,14 @@ class SandboxRpc(BaseModel):
                 message.id in self._waiting_for_replies
                 and self._waiting_for_replies[message.id]
             ):
-                self._waiting_for_replies[message.id](message.result)
+                self._waiting_for_replies[message.id].set_result(message.result)
                 return
         elif isinstance(message, Error):
             if (
                 message.id in self._waiting_for_replies
                 and self._waiting_for_replies[message.id]
             ):
-                self._waiting_for_replies[message.id].reject(
+                self._waiting_for_replies[message.id].set_exception(
                     RpcException(
                         code=message.code,
                         message=message.message,
@@ -174,22 +149,15 @@ class SandboxRpc(BaseModel):
                     )
                 )
                 return
-
         elif isinstance(message, Notification):
             self.on_message(message)
 
-    def _close(self):
-        self._closed = True
-
-        for cancel in self._process_cleanup:
-            cancel()
-
-        self._process_cleanup.clear()
-
-        # .copy() prevents a RuntimeError: dictionary changed size during iteration
-        for handler in self._waiting_for_replies.copy().values():
-            handler.cancel()
-            del handler
-
-    def close(self):
-        self._close()
+    async def close(self):
+        for id in self._waiting_for_replies:
+            fut = self._waiting_for_replies[id]
+            if not fut.done():
+                fut.cancel()
+        for t in self._bg_tasks:
+            t.cancel()
+        if self._websocket:
+            await self._websocket.close()

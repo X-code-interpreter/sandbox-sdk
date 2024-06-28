@@ -3,19 +3,10 @@ from __future__ import annotations
 import logging
 import re
 import inspect
-import threading
-import time
-from concurrent.futures import Future
-from typing import (
-    Any,
-    Callable,
-    ClassVar,
-    Dict,
-    List,
-    Optional,
-    Union,
-)
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Union, Coroutine
 from pydantic import BaseModel
+from asyncio import Event
+import asyncio
 
 from sandbox_sdk.constants import TIMEOUT
 from sandbox_sdk.sandbox.env_vars import EnvVars
@@ -98,13 +89,13 @@ class Process:
         self,
         process_id: str,
         sandbox: SandboxConnection,
-        trigger_exit: Callable[[], Any],
-        finished: Future[ProcessOutput],
+        unsub_coro: Coroutine[Any, Any, None],
+        finished: Event,
         output: ProcessOutput,
     ):
         self._process_id = process_id
         self._sandbox = sandbox
-        self._trigger_exit = trigger_exit
+        self._unsub_coro = unsub_coro
         self._finished = finished
         self._output = output
 
@@ -113,7 +104,7 @@ class Process:
         """
         The exit code of the last process started by this manager.
         """
-        if not self.finished:
+        if not self.finished.is_set():
             raise ProcessException("Process has not finished yet")
         return self.output.exit_code
 
@@ -155,7 +146,7 @@ class Process:
     @property
     def finished(self):
         """
-        A future that is resolved when the process exits.
+        An asyncio.Event that is resolved when the process exits.
         """
         return self._finished
 
@@ -167,23 +158,21 @@ class Process:
         """
         return self._process_id
 
-    def wait(self, timeout: Optional[float] = None) -> ProcessOutput:
+    async def wait(self, timeout: Optional[float] = TIMEOUT) -> ProcessOutput:
         """
         Wait for the process to exit.
 
         :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out. If set to None, the method will continue to wait until it completes, regardless of time
         """
-        start_time = time.time()
-        while timeout is None or time.time() - start_time < timeout:
-            if self._finished.done():
-                return self._finished.result()
-            time.sleep(0.1)
-            if not self._sandbox.is_open:
-                break
+        try:
+            await asyncio.wait_for(self.finished.wait(), timeout)
+        except asyncio.TimeoutError as e:
+            raise TimeoutException(
+                f"Process did not finish within {timeout} seconds: {e}"
+            ) from e
+        return self._output
 
-        raise TimeoutException(f"Process did not finish within {timeout} seconds")
-
-    def send_stdin(self, data: str, timeout: Optional[float] = TIMEOUT) -> None:
+    async def send_stdin(self, data: str, timeout: Optional[float] = TIMEOUT) -> None:
         """
         Send data to the process stdin.
 
@@ -191,7 +180,7 @@ class Process:
         :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out (default is 60 seconds). If set to None, the method will continue to wait until it completes, regardless of time
         """
         try:
-            self._sandbox._call(
+            await self._sandbox._call(
                 ProcessManager._service_name,
                 "stdin",
                 [self.process_id, data],
@@ -200,19 +189,20 @@ class Process:
         except RpcException as e:
             raise ProcessException(e.message) from e
 
-    def kill(self, timeout: Optional[float] = TIMEOUT) -> None:
+    async def kill(self, timeout: Optional[float] = TIMEOUT) -> None:
         """
         Kill the process.
 
         :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out (default is 60 seconds). If set to None, the method will continue to wait until it completes, regardless of time
         """
         try:
-            self._sandbox._call(
+            await self._sandbox._call(
                 ProcessManager._service_name, "kill", [self.process_id], timeout=timeout
             )
         except RpcException as e:
             raise ProcessException(e.message) from e
-        self._trigger_exit()
+        finally:
+            self.finished.set()
 
 
 class ProcessManager:
@@ -222,6 +212,7 @@ class ProcessManager:
 
     _service_name = "process"
 
+    # TODO(huang-jl): remove on_exit handler?
     def __init__(
         self,
         sandbox: SandboxConnection,
@@ -235,7 +226,7 @@ class ProcessManager:
         self._on_stderr = on_stderr
         self._on_exit = on_exit
 
-    def start(
+    async def start(
         self,
         cmd: str,
         on_stdout: Optional[Callable[[ProcessMessage], Any]] = None,
@@ -255,18 +246,15 @@ class ProcessManager:
         on_stderr = on_stderr or self._on_stderr
         on_exit = on_exit or self._on_exit
 
-        future_exit = Future()
+        future_exit = asyncio.Event()
         process_id = process_id or create_id(12)
-
-        unsub_all: Optional[Callable] = None
 
         output = ProcessOutput()
 
         def handle_exit(exit_code: int):
             output.exit_code = exit_code
             logger.info(f"Process {process_id} exited with exit code {exit_code}")
-            if not future_exit.done():
-                future_exit.set_result(True)
+            future_exit.set()
 
         def handle_stdout(data: Dict[Any, Any]):
             out = OutStdoutResponse(**data)
@@ -321,25 +309,18 @@ class ProcessManager:
                     params=[process_id],
                 ),
             ]
-            unsub_all = self._sandbox._handle_subscriptions(*subscription_args)
+            unsub_all = await self._sandbox._handle_subscriptions(*subscription_args)
 
-        except (RpcException, MultipleExceptions) as e:
-            future_exit.cancel()
+        except MultipleExceptions as e:
+            raise ProcessException(
+                "Failed to subscribe to RPC services necessary for starting process"
+            ) from e
 
-            if isinstance(e, RpcException):
-                raise ProcessException(e.message) from e
-            elif isinstance(e, MultipleExceptions):
-                raise ProcessException(
-                    "Failed to subscribe to RPC services necessary for starting process"
-                ) from e
+        logger.info(f"process subscribed (id: {process_id})")
 
-        future_exit_handler_finish: Future[ProcessOutput] = Future()
-
-        def exit_handler():
-            future_exit.result()
-            logger.info(f"Handling process exit (id: {process_id})")
-            if unsub_all:
-                unsub_all()
+        # create a background coroutine to unsub when exit
+        async def bg_exit_handler():
+            await future_exit.wait()
             if on_exit:
                 sig = inspect.signature(on_exit)
                 params = sig.parameters.values()
@@ -350,19 +331,12 @@ class ProcessManager:
                         on_exit(output.exit_code or 0)
                 except TypeError as error:
                     logger.exception(f"Error in on_exit callback: {error}")
-            future_exit_handler_finish.set_result(output)
+            if unsub_all:
+                await unsub_all
+            logger.info(f"unsub all (id: {process_id})")
 
-        threading.Thread(
-            name="e2b-process-exit-handler", daemon=True, target=exit_handler
-        ).start()
-
-        def trigger_exit():
-            logger.info(f"Exiting the process (id: {process_id})")
-            if not future_exit.done():
-                future_exit.set_result(None)
-
-            future_exit_handler_finish.result()
-            logger.debug(f"Exited the process (id: {process_id})")
+        t = asyncio.create_task(bg_exit_handler(), name="process-bg-exit-handler")
+        self._sandbox._bg_tasks.append(t)
 
         try:
             if not cwd and rootdir:
@@ -372,7 +346,7 @@ class ProcessManager:
             if not cwd and self._sandbox.cwd:
                 cwd = self._sandbox.cwd
 
-            self._sandbox._call(
+            await self._sandbox._call(
                 self._service_name,
                 "start",
                 [
@@ -388,11 +362,11 @@ class ProcessManager:
                 output=output,
                 sandbox=self._sandbox,
                 process_id=process_id,
-                trigger_exit=trigger_exit,
-                finished=future_exit_handler_finish,
+                unsub_coro=unsub_all,
+                finished=future_exit,
             )
         except RpcException as e:
-            trigger_exit()
+            future_exit.set()
             if re.match(
                 r"error starting process '\w+': fork/exec /bin/bash: no such file or directory",
                 e.message,
@@ -401,12 +375,11 @@ class ProcessManager:
                     "Failed to start the process. You are trying set `cwd` to a directory that does not exist."
                 ) from e
             raise ProcessException(e.message) from e
-        except TimeoutError as e:
-            logger.error(f"Timeout error during starting the process: {cmd}")
-            trigger_exit()
+        except Exception as e:
+            future_exit.set()
             raise e
 
-    def start_and_wait(
+    async def start_and_wait(
         self,
         cmd: str,
         on_stdout: Optional[Callable[[ProcessMessage], Any]] = None,
@@ -417,7 +390,7 @@ class ProcessManager:
         process_id: Optional[str] = None,
         timeout: Optional[float] = TIMEOUT,
     ) -> ProcessOutput:
-        return self.start(
+        p = await self.start(
             cmd,
             on_stdout=on_stdout,
             on_stderr=on_stderr,
@@ -426,4 +399,5 @@ class ProcessManager:
             cwd=cwd,
             process_id=process_id,
             timeout=timeout,
-        ).wait()
+        )
+        return await p.wait()

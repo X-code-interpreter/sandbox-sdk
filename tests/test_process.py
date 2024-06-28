@@ -1,32 +1,37 @@
+import asyncio
 from unittest.mock import MagicMock
 
 from sandbox_sdk import Sandbox
+from .utils import asyncio_run
 
 
-def test_process_expected_stdout():
+@asyncio_run
+async def test_process_expected_stdout():
     # TODO: Implement this once we fix envd stdout/stderr race condition
     pass
 
 
-def test_process_expected_stderr():
+@asyncio_run
+async def test_process_expected_stderr():
     # TODO: Implement this once we fix envd stdout/stderr race condition
     pass
 
 
-def test_process_on_stdout_stderr():
-    sandbox = Sandbox()
+@asyncio_run
+async def test_process_on_stdout_stderr():
+    sandbox = await Sandbox.create()
 
     stdout = []
     stderr = []
 
-    proc = sandbox.process.start(
+    proc = await sandbox.process.start(
         "pwd",
         on_stdout=lambda data: stdout.append(data),
         on_stderr=lambda data: stderr.append(data),
         cwd="/tmp",
     )
 
-    output = proc.wait()
+    output = await proc.wait()
 
     assert not output.error
     assert output.stdout == "/tmp"
@@ -35,34 +40,36 @@ def test_process_on_stdout_stderr():
     assert stderr == []
     assert proc.exit_code == 0
 
-    sandbox.close()
+    await sandbox.close()
 
 
-def test_process_on_exit():
-    sandbox = Sandbox()
+@asyncio_run
+async def test_process_on_exit():
+    sandbox = await Sandbox.create()
 
     on_exit = MagicMock()
 
-    proc = sandbox.process.start(
+    proc = await sandbox.process.start(
         "pwd",
         on_exit=lambda exit_code: on_exit(exit_code),
     )
 
-    proc.wait()
+    await proc.wait()
     on_exit.assert_called_once()
 
-    sandbox.close()
+    await sandbox.close()
 
 
-def test_process_send_stdin():
-    sandbox = Sandbox()
+@asyncio_run
+async def test_process_send_stdin():
+    sandbox = await Sandbox.create()
 
-    proc = sandbox.process.start(
+    proc = await sandbox.process.start(
         'read -r line; echo "$line"',
         cwd="/code",
     )
-    proc.send_stdin("ping\n")
-    proc.wait()
+    await proc.send_stdin("ping\n")
+    await proc.wait()
 
     assert proc.output.stdout == "ping"
 
@@ -71,34 +78,36 @@ def test_process_send_stdin():
     assert message.line == "ping"
     assert not message.error
 
-    sandbox.close()
+    await sandbox.close()
 
 
-def test_default_on_exit():
+@asyncio_run
+async def test_default_on_exit():
     on_exit = MagicMock()
 
-    sandbox = Sandbox(on_exit=lambda exit_code: on_exit(exit_code))
-    proc = sandbox.process.start(
+    sandbox = await Sandbox.create(on_exit=lambda exit_code: on_exit(exit_code))
+    proc = await sandbox.process.start(
         "pwd",
         on_exit=lambda: print("EXIT"),
     )
-    proc.wait()
+    await proc.wait()
     on_exit.assert_not_called()
 
-    proc = sandbox.process.start(
+    proc = await sandbox.process.start(
         "pwd",
     )
-    proc.wait()
+    await proc.wait()
     on_exit.assert_called_once()
 
-    sandbox.close()
+    await sandbox.close()
 
 
-def test_process_default_on_stdout_stderr():
+@asyncio_run
+async def test_process_default_on_stdout_stderr():
     on_stdout = MagicMock()
     on_stderr = MagicMock()
 
-    sandbox = Sandbox(
+    sandbox = await Sandbox.create(
         on_stdout=lambda data: on_stdout(),
         on_stderr=lambda data: on_stderr(),
     )
@@ -107,40 +116,39 @@ def test_process_default_on_stdout_stderr():
     stdout = []
     stderr = []
 
-    proc = sandbox.process.start(
+    proc = await sandbox.process.start(
         code,
         on_stdout=lambda data: stdout.append(data),
         on_stderr=lambda data: stderr.append(data),
     )
 
-    proc.wait()
+    await proc.wait()
     # it depends on the template used, as start_cmd might send
     # output to journalctl
-    # if define the start_cmd in the template the on_stdout and on_stderr will be called.
-    # on_stdout.assert_not_called()
-    # on_stderr.assert_not_called()
-    on_stdout.assert_called()
+    # if define the start_cmd in the template, the on_stdout and on_stderr will be called.
+    on_stdout.assert_not_called()
     on_stderr.assert_not_called()
 
-    proc = sandbox.process.start(code)
-    proc.wait()
+    proc = await sandbox.process.start(code)
+    await proc.wait()
 
     on_stdout.assert_called()
     on_stderr.assert_called()
     assert proc.exit_code == 1
 
-    sandbox.close()
+    await sandbox.close()
 
 
-def test_process_start_and_wait():
-    sandbox = Sandbox()
+@asyncio_run
+async def test_process_start_and_wait():
+    sandbox = await Sandbox.create()
     code = "python -c \"print('Hello world')\""
 
-    output = sandbox.process.start_and_wait(code)
+    output = await sandbox.process.start_and_wait(code)
 
-    proc = sandbox.process.start(code)
-    proc.wait()
+    proc = await sandbox.process.start(code)
+    await proc.wait()
 
     assert output.exit_code == 0
 
-    sandbox.close()
+    await sandbox.close()

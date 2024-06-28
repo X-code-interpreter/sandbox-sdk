@@ -1,17 +1,16 @@
+import asyncio
+from asyncio import Event, Task
+
 import json
 import logging
-import threading
 import time
 import uuid
-from concurrent.futures import Future
-from queue import Queue
-from typing import Callable, Dict, Any, Optional
+from typing import Callable, Dict, Any, Optional, List
 
 from sandbox_sdk import ProcessMessage
 from sandbox_sdk.constants import TIMEOUT
 from sandbox_sdk.sandbox import TimeoutException
 from sandbox_sdk.sandbox.websocket_client import WebSocket
-from sandbox_sdk.utils.future import DeferredFuture
 
 from .models import Execution, Result, Error
 
@@ -37,71 +36,38 @@ class CellExecution:
         on_result: Optional[Callable[[Result], Any]] = None,
     ):
         self.partial_result = Execution()
-        self.execution = Future()
+        self.execution = Event()
         self.on_stdout = on_stdout
         self.on_stderr = on_stderr
         self.on_result = on_result
 
 
 class JupyterKernelWebSocket:
-
     def __init__(self, url: str, session_id: str):
         self.url = url
         self.session_id = session_id
         self._cells: Dict[str, CellExecution] = {}
-        self._waiting_for_replies: Dict[str, DeferredFuture] = {}
-        self._queue_in = Queue()
-        self._queue_out = Queue()
-        self._stopped = threading.Event()
+        self._websocket: WebSocket = WebSocket(url)
+        self._bg_tasks: List[Task] = []
 
-    def process_messages(self):
-        while not self._stopped.is_set():
-            if self._queue_out.empty():
-                time.sleep(0.01)
-                continue
-
-            data = self._queue_out.get()
-            logger.debug(f"WebSocket received message: {data}".strip())
-            self._receive_message(json.loads(data))
-            self._queue_out.task_done()
-
-    def connect(self, timeout: float = TIMEOUT):
-        started = threading.Event()
-
-        threading.Thread(
-            target=self.process_messages, daemon=True, name="e2b-process-messages"
-        ).start()
-
-        threading.Thread(
-            target=WebSocket(
-                url=self.url,
-                queue_in=self._queue_in,
-                queue_out=self._queue_out,
-                started=started,
-                stopped=self._stopped
-            ).run,
-            daemon=True,
-            name="e2b-code-interpreter-websocket",
-        ).start()
-
-        logger.debug("WebSocket waiting to start")
-
+    async def connect(self, timeout: Optional[float] = TIMEOUT):
         try:
-            start_time = time.time()
-            while (
-                not started.is_set()
-                and time.time() - start_time < timeout
-                and not self._stopped.is_set()
-            ):
-                time.sleep(0.1)
-
-            if not started.is_set():
-                raise TimeoutException("WebSocket failed to start")
-        except BaseException as e:
-            self.close()
-            raise Exception(f"WebSocket failed to start: {e}") from e
+            await asyncio.wait_for(self._websocket.connect(), timeout=timeout)
+        except asyncio.TimeoutError as e:
+            logger.error(f"connect jupyter websocket timeout {timeout} seconds: {e}")
+            raise TimeoutException(
+                f"connect jupyter websocket timeout {timeout} seconds: {e}"
+            ) from e
 
         logger.debug("WebSocket started")
+
+        async def process_messages():
+            async for msg in self._websocket:
+                logger.debug(f"WebSocket received message: {msg[:1000]}".strip())
+                self._receive_message(json.loads(msg))
+
+        t = asyncio.create_task(process_messages())
+        self._bg_tasks.append(t)
 
     def _get_execute_request(self, msg_id: str, code: str) -> str:
         return json.dumps(
@@ -125,7 +91,7 @@ class JupyterKernelWebSocket:
             }
         )
 
-    def send_execution_message(
+    async def send_execution_message(
         self,
         code: str,
         on_stdout: Optional[Callable[[ProcessMessage], Any]] = None,
@@ -141,13 +107,16 @@ class JupyterKernelWebSocket:
             on_result=on_result,
         )
         request = self._get_execute_request(message_id, code)
-        self._queue_in.put(request)
+        await self._websocket.send(request)
         return message_id
 
-    def get_result(
+    async def get_result(
         self, message_id: str, timeout: Optional[float] = TIMEOUT
     ) -> Execution:
-        result = self._cells[message_id].execution.result(timeout=timeout)
+        await asyncio.wait_for(
+            self._cells[message_id].execution.wait(), timeout=timeout
+        )
+        result = self._cells[message_id].partial_result
         logger.debug(f"Got result for message: {message_id}")
         del self._cells[message_id]
         return result
@@ -218,7 +187,7 @@ class JupyterKernelWebSocket:
             if data["content"]["execution_state"] == "idle":
                 if cell.input_accepted:
                     logger.debug(f"Cell {parent_msg_ig} finished execution")
-                    cell.execution.set_result(execution)
+                    cell.execution.set()
 
             elif data["content"]["execution_state"] == "error":
                 logger.debug(f"Cell {parent_msg_ig} finished execution with error")
@@ -227,7 +196,7 @@ class JupyterKernelWebSocket:
                     value=data["content"]["evalue"],
                     traceback_raw=data["content"]["traceback"],
                 )
-                cell.execution.set_result(execution)
+                cell.execution.set()
 
         elif data["msg_type"] == "execute_reply":
             if data["content"]["status"] == "error":
@@ -247,11 +216,12 @@ class JupyterKernelWebSocket:
         else:
             logger.warning(f"[UNHANDLED MESSAGE TYPE]: {data['msg_type']}")
 
-    def close(self):
+    async def close(self):
         logger.debug("Closing WebSocket")
-        self._stopped.set()
+        for msg_id in self._cells:
+            cell = self._cells[msg_id]
+            cell.execution.set()
+        for t in self._bg_tasks:
+            t.cancel()
 
-        for handler in self._waiting_for_replies.values():
-            logger.debug(f"Cancelling waiting for execution result for {handler}")
-            handler.cancel()
-            del handler
+        await self._websocket.close()

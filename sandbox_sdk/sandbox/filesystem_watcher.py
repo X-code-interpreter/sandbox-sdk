@@ -1,7 +1,7 @@
 import logging
 
 from enum import Enum
-from typing import Any, Callable, Optional, Set
+from typing import Any, Callable, Optional, Set, Coroutine
 
 from pydantic import BaseModel
 
@@ -52,10 +52,10 @@ class FilesystemWatcher:
         self._connection = connection
         self._path = path
         self._service_name = service_name
-        self._unsubscribe: Optional[Callable[[], Any]] = None
+        self._unsubscribe: Optional[Callable[[], Coroutine[Any, Any, None]]] = None
         self._listeners: Set[Callable[[FilesystemEvent], Any]] = set()
 
-    def start(self, timeout: Optional[float] = TIMEOUT) -> None:
+    async def start(self, timeout: Optional[float] = TIMEOUT) -> None:
         """
         Start the filesystem watcher.
 
@@ -66,7 +66,7 @@ class FilesystemWatcher:
 
         logger.debug("Starting filesystem watcher for %s", self.path)
         try:
-            self._unsubscribe = self._connection._subscribe(
+            self._unsubscribe = await self._connection._subscribe(
                 self._service_name,
                 self._handle_filesystem_events,
                 "watchDir",
@@ -77,7 +77,7 @@ class FilesystemWatcher:
         except RpcException as e:
             raise FilesystemException(e.message) from e
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         """
         Stop the filesystem watcher.
         """
@@ -86,7 +86,7 @@ class FilesystemWatcher:
         self._listeners.clear()
         if self._unsubscribe:
             try:
-                self._unsubscribe()
+                await self._unsubscribe()
                 self._unsubscribe = None
                 logger.debug("Stopped filesystem watcher for %s", self.path)
             except RpcException as e:

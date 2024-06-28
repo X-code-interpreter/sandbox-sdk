@@ -35,8 +35,10 @@ class SandboxCreateRequest(_message.Message):
     def __init__(self, sandbox: _Optional[_Union[SandboxConfig, _Mapping]] = ...) -> None: ...
 
 class SandboxCreateResponse(_message.Message):
-    __slots__ = ()
-    def __init__(self) -> None: ...
+    __slots__ = ("privateIP",)
+    PRIVATEIP_FIELD_NUMBER: _ClassVar[int]
+    privateIP: str
+    def __init__(self, privateIP: _Optional[str] = ...) -> None: ...
 
 class SandboxRequest(_message.Message):
     __slots__ = ("sandboxID",)

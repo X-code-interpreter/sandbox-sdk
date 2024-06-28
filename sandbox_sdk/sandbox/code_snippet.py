@@ -24,7 +24,7 @@ class CodeSnippetManager(BaseModel):
 
     on_scan_ports: Optional[Callable[[List[OpenPort]], Any]] = None
 
-    def _subscribe(self):
+    async def _subscribe(self):
         def on_scan_ports(ports: List[dict]):
             ports = [
                 OpenPort(
@@ -39,7 +39,7 @@ class CodeSnippetManager(BaseModel):
 
         if self.on_scan_ports:
             try:
-                self.sandbox._handle_subscriptions(
+                await self.sandbox._handle_subscriptions(
                     SubscriptionArgs(
                         service=self.service_name,
                         handler=on_scan_ports,

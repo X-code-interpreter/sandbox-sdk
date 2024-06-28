@@ -2,15 +2,19 @@ from __future__ import annotations
 
 
 import logging
-import threading
-from concurrent.futures import Future
-from typing import Any, Callable, Optional
+import asyncio
+from asyncio import Event, Task
+from typing import Any, Callable, Optional, List
 
 from pydantic import BaseModel
 
 from sandbox_sdk.constants import TIMEOUT
 from sandbox_sdk.sandbox.env_vars import EnvVars
-from sandbox_sdk.sandbox.exception import MultipleExceptions, RpcException, TerminalException
+from sandbox_sdk.sandbox.exception import (
+    MultipleExceptions,
+    RpcException,
+    TerminalException,
+)
 from sandbox_sdk.sandbox.sandbox_connection import SandboxConnection, SubscriptionArgs
 from sandbox_sdk.utils.id import create_id
 
@@ -57,27 +61,26 @@ class Terminal:
         """
         return self._terminal_id
 
-    def wait(self):
+    async def wait(self) -> TerminalOutput:
         """
         Wait till the terminal session exits.
         """
-        return self.finished.result()
+        await self.finished.wait()
+        return self._output
 
     def __init__(
         self,
         terminal_id: str,
         sandbox: SandboxConnection,
-        trigger_exit: Callable[[], Any],
-        finished: Future[TerminalOutput],
+        finished: Event,
         output: TerminalOutput,
     ):
         self._terminal_id = terminal_id
         self._sandbox = sandbox
-        self._trigger_exit = trigger_exit
         self._finished = finished
         self._output = output
 
-    def send_data(self, data: str, timeout: Optional[float] = TIMEOUT) -> None:
+    async def send_data(self, data: str, timeout: Optional[float] = TIMEOUT) -> None:
         """
         Send data to the terminal standard input.
 
@@ -85,7 +88,7 @@ class Terminal:
         :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out (default is 60 seconds). If set to None, the method will continue to wait until it completes, regardless of time
         """
         try:
-            self._sandbox._call(
+            await self._sandbox._call(
                 TerminalManager._service_name,
                 "data",
                 [self.terminal_id, data],
@@ -94,7 +97,7 @@ class Terminal:
         except RpcException as e:
             raise TerminalException(e.message) from e
 
-    def resize(self, cols: int, rows: int, timeout: Optional[float] = TIMEOUT) -> None:
+    async def resize(self, cols: int, rows: int, timeout: Optional[float] = TIMEOUT) -> None:
         """
         Resizes the terminal tty.
 
@@ -103,7 +106,7 @@ class Terminal:
         :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out (default is 60 seconds). If set to None, the method will continue to wait until it completes, regardless of time
         """
         try:
-            self._sandbox._call(
+            await self._sandbox._call(
                 TerminalManager._service_name,
                 "resize",
                 [self.terminal_id, cols, rows],
@@ -112,14 +115,14 @@ class Terminal:
         except RpcException as e:
             raise TerminalException(e.message) from e
 
-    def kill(self, timeout: Optional[float] = TIMEOUT) -> None:
+    async def kill(self, timeout: Optional[float] = TIMEOUT) -> None:
         """
         Kill the terminal session.
 
         :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out (default is 60 seconds). If set to None, the method will continue to wait until it completes, regardless of time
         """
         try:
-            self._sandbox._call(
+            await self._sandbox._call(
                 TerminalManager._service_name,
                 "destroy",
                 [self.terminal_id],
@@ -127,7 +130,8 @@ class Terminal:
             )
         except RpcException as e:
             raise TerminalException(e.message) from e
-        self._trigger_exit()
+        finally:
+            self.finished.set()
 
 
 class TerminalManager:
@@ -140,7 +144,7 @@ class TerminalManager:
     def __init__(self, sandbox: SandboxConnection):
         self._sandbox = sandbox
 
-    def start(
+    async def start(
         self,
         on_data: Callable[[str], Any],
         cols: int,
@@ -170,10 +174,8 @@ class TerminalManager:
         """
         env_vars = self._sandbox.env_vars.update(env_vars or {})
 
-        future_exit = Future()
+        future_exit = asyncio.Event()
         terminal_id = terminal_id or create_id(12)
-
-        unsub_all: Optional[Callable[[], Any]] = None
 
         output = TerminalOutput()
 
@@ -182,7 +184,7 @@ class TerminalManager:
             on_data(data)
 
         try:
-            unsub_all = self._sandbox._handle_subscriptions(
+            unsub_all = await self._sandbox._handle_subscriptions(
                 SubscriptionArgs(
                     service=self._service_name,
                     handler=handle_data,
@@ -191,47 +193,35 @@ class TerminalManager:
                 ),
                 SubscriptionArgs(
                     service=self._service_name,
-                    handler=lambda result: future_exit.set_result(result),
+                    handler=lambda _: future_exit.set(),
                     method="onExit",
                     params=[terminal_id],
                 ),
             )
-        except (RpcException, MultipleExceptions) as e:
-            future_exit.cancel()
+        except MultipleExceptions as e:
+            raise TerminalException(
+                "Failed to subscribe to RPC services necessary for starting terminal"
+            ) from e
+        except RpcException as e:
+            raise TerminalException(e.message) from e
 
-            if isinstance(e, RpcException):
-                raise TerminalException(e.message) from e
-            elif isinstance(e, MultipleExceptions):
-                raise TerminalException(
-                    "Failed to subscribe to RPC services necessary for starting terminal"
-                ) from e
-
-        # TODO: Handle exit handler finish for exits (the same for processes)
-        future_exit_handler_finish: Future[TerminalOutput] = Future()
-
-        def exit_handler():
-            future_exit.result()
+        async def bg_exit_handler():
+            await future_exit.wait()
 
             if unsub_all:
-                unsub_all()
+                await unsub_all
 
             if on_exit:
                 on_exit()
-            future_exit_handler_finish.set_result(output)
 
-        threading.Thread(
-            name="e2b-terminal-exit-handler", daemon=True, target=exit_handler
-        ).start()
-
-        def trigger_exit():
-            future_exit.set_result(None)
-            future_exit_handler_finish.result()
+        t = asyncio.create_task(bg_exit_handler(), name="terminal-bg-exit-handler")
+        self._sandbox._bg_tasks.append(t)
 
         try:
             if not cwd and self._sandbox.cwd:
                 cwd = self._sandbox.cwd
 
-            self._sandbox._call(
+            await self._sandbox._call(
                 self._service_name,
                 "start",
                 [
@@ -247,10 +237,12 @@ class TerminalManager:
             return Terminal(
                 terminal_id=terminal_id,
                 sandbox=self._sandbox,
-                trigger_exit=trigger_exit,
-                finished=future_exit_handler_finish,
+                finished=future_exit,
                 output=output,
             )
         except RpcException as e:
-            trigger_exit()
+            future_exit.set()
             raise TerminalException(e.message) from e
+        except Exception as e:
+            future_exit.set()
+            raise e

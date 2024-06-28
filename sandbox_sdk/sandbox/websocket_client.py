@@ -1,14 +1,11 @@
 from __future__ import annotations
-
 import asyncio
+
 import logging
 
-from queue import Queue
-from threading import Event
-from typing import Any, Callable, List, Optional
+from typing import Optional
 
-from websockets.legacy.client import WebSocketClientProtocol, connect
-from websockets.exceptions import ConnectionClosed
+from websockets.client import connect, WebSocketClientProtocol
 from websockets.typing import Data
 
 logger = logging.getLogger(__name__)
@@ -18,56 +15,26 @@ class WebSocket:
     def __init__(
         self,
         url: str,
-        started: Event,
-        stopped: Event,
-        queue_in: Queue[dict],
-        queue_out: Queue[Data],
     ):
         self._ws: Optional[WebSocketClientProtocol] = None
         self.url = url
-        self.started = started
-        self.stopped = stopped
-        self._process_cleanup: List[Callable[[], Any]] = []
-        self._queue_in = queue_in
-        self._queue_out = queue_out
 
-    def run(self):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    def __aiter__(self):
+        if not self._ws:
+            raise Exception("No WebSocket connection")
+        return self._ws.__aiter__()
 
-        loop.run_until_complete(self.async_run())
+    async def send(self, message: str):
+        if not self._ws:
+            raise Exception("No WebSocket connection")
+        await self._ws.send(message)
 
-    async def async_run(self):
-        await self._connect()
-        await self.close()
+    async def recv(self) -> Data:
+        if not self._ws:
+            raise Exception("No WebSocket connection")
+        return await self._ws.recv()
 
-    async def _send_message(self):
-        logger.debug("WebSocket starting to send messages")
-        while True:
-            if self._queue_in.empty():
-                await asyncio.sleep(0)
-                continue
-            message = self._queue_in.get()
-            logger.debug(f"WebSocket message to send: {message}")
-            if self._ws:
-                await self._ws.send(message)
-                logger.debug(f"WebSocket message sent: {message}")
-                self._queue_in.task_done()
-            else:
-                logger.error("No WebSocket connection")
-
-    async def _receive_message(self):
-        try:
-            if not self._ws:
-                logger.error("No WebSocket connection")
-                return
-            async for message in self._ws:
-                logger.debug(f"WebSocket received message: {message}".strip())
-                self._queue_out.put(message)
-        except Exception as e:
-            logger.error(f"WebSocket received error while receiving messages: {e}")
-
-    async def _connect(self):
+    async def connect(self, retry: int = 3):
         logger.debug(f"WebSocket connecting to {self.url}")
 
         ws_logger = logger.getChild("websockets.client")
@@ -78,43 +45,31 @@ class WebSocket:
             max_size=None,
             max_queue=None,
             logger=ws_logger,
+            close_timeout=5,
         )
 
         websocket_connector.BACKOFF_MIN = 1
         websocket_connector.BACKOFF_FACTOR = 1
         websocket_connector.BACKOFF_INITIAL = 0.2  # type: ignore
 
-        async for websocket in websocket_connector:
+        tried = 0
+        retry_sleep_time = [0.5, 1, 5]
+        while True:
             try:
-                self._ws = websocket
-                self.started.set()
-                logger.info(f"WebSocket connected to {self.url}")
-
-                send_task = asyncio.create_task(
-                    self._send_message(), name="send_message"
-                )
-                self._process_cleanup.append(send_task.cancel)
-
-                receive_task = asyncio.create_task(
-                    self._receive_message(), name="receive_message"
-                )
-                self._process_cleanup.append(receive_task.cancel)
-
-                while not self.stopped.is_set():
-                    await asyncio.sleep(0)
-
-                logger.info("WebSocket stopped")
+                self._ws = await websocket_connector
+            except Exception as e:
+                tried += 1
+                logger.warning(f"connect websocket failed (try {tried} times): {e}")
+                if tried > retry:
+                    raise e
+                await asyncio.sleep(retry_sleep_time[tried - 1])
+            else:
                 break
-            except ConnectionClosed:
-                logger.warning("WebSocket disconnected, it will try to reconnect")
-                if self.stopped.is_set():
-                    break
+
+        logger.info(f"WebSocket connected to {self.url}, totally tried {tried} times")
 
     async def close(self):
-        for cancel in self._process_cleanup:
-            cancel()
-
-        self._process_cleanup.clear()
-
         if self._ws:
+            logging.debug(f"closing websocket (url: {self.url})")
             await self._ws.close()
+            logging.debug(f"websocket (url: {self.url}) closed")

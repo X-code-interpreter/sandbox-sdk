@@ -16,7 +16,7 @@ from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
 from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x12orchestrator.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc9\x01\n\rSandboxConfig\x12\x12\n\ntemplateID\x18\x01 \x01(\t\x12\x15\n\rkernelVersion\x18\x02 \x01(\t\x12\x19\n\x11maxInstanceLength\x18\x03 \x01(\x03\x12\x11\n\tsandboxID\x18\x04 \x01(\t\x12.\n\x08metadata\x18\x05 \x03(\x0b\x32\x1c.SandboxConfig.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"7\n\x14SandboxCreateRequest\x12\x1f\n\x07sandbox\x18\x01 \x01(\x0b\x32\x0e.SandboxConfig\"\x17\n\x15SandboxCreateResponse\"#\n\x0eSandboxRequest\x12\x11\n\tsandboxID\x18\x01 \x01(\t\"_\n\x0eRunningSandbox\x12\x1e\n\x06\x63onfig\x18\x01 \x01(\x0b\x32\x0e.SandboxConfig\x12-\n\tstartTime\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\"9\n\x13SandboxListResponse\x12\"\n\tsandboxes\x18\x01 \x03(\x0b\x32\x0f.RunningSandbox2\xab\x01\n\x07Sandbox\x12\x37\n\x06\x43reate\x12\x15.SandboxCreateRequest\x1a\x16.SandboxCreateResponse\x12\x34\n\x04List\x12\x16.google.protobuf.Empty\x1a\x14.SandboxListResponse\x12\x31\n\x06\x44\x65lete\x12\x0f.SandboxRequest\x1a\x16.google.protobuf.EmptyBYZWhttps://github.com/X-code-interpreter/sandbox-backend/packages/shared/grpc/orchestratorb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x12orchestrator.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc9\x01\n\rSandboxConfig\x12\x12\n\ntemplateID\x18\x01 \x01(\t\x12\x15\n\rkernelVersion\x18\x02 \x01(\t\x12\x19\n\x11maxInstanceLength\x18\x03 \x01(\x03\x12\x11\n\tsandboxID\x18\x04 \x01(\t\x12.\n\x08metadata\x18\x05 \x03(\x0b\x32\x1c.SandboxConfig.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"7\n\x14SandboxCreateRequest\x12\x1f\n\x07sandbox\x18\x01 \x01(\x0b\x32\x0e.SandboxConfig\"*\n\x15SandboxCreateResponse\x12\x11\n\tprivateIP\x18\x01 \x01(\t\"#\n\x0eSandboxRequest\x12\x11\n\tsandboxID\x18\x01 \x01(\t\"_\n\x0eRunningSandbox\x12\x1e\n\x06\x63onfig\x18\x01 \x01(\x0b\x32\x0e.SandboxConfig\x12-\n\tstartTime\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\"9\n\x13SandboxListResponse\x12\"\n\tsandboxes\x18\x01 \x03(\x0b\x32\x0f.RunningSandbox2\xe0\x01\n\x07Sandbox\x12\x37\n\x06\x43reate\x12\x15.SandboxCreateRequest\x1a\x16.SandboxCreateResponse\x12\x34\n\x04List\x12\x16.google.protobuf.Empty\x1a\x14.SandboxListResponse\x12\x31\n\x06\x44\x65lete\x12\x0f.SandboxRequest\x1a\x16.google.protobuf.Empty\x12\x33\n\x08\x44\x65\x61\x63tive\x12\x0f.SandboxRequest\x1a\x16.google.protobuf.EmptyBYZWhttps://github.com/X-code-interpreter/sandbox-backend/packages/shared/grpc/orchestratorb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,13 +33,13 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_SANDBOXCREATEREQUEST']._serialized_start=288
   _globals['_SANDBOXCREATEREQUEST']._serialized_end=343
   _globals['_SANDBOXCREATERESPONSE']._serialized_start=345
-  _globals['_SANDBOXCREATERESPONSE']._serialized_end=368
-  _globals['_SANDBOXREQUEST']._serialized_start=370
-  _globals['_SANDBOXREQUEST']._serialized_end=405
-  _globals['_RUNNINGSANDBOX']._serialized_start=407
-  _globals['_RUNNINGSANDBOX']._serialized_end=502
-  _globals['_SANDBOXLISTRESPONSE']._serialized_start=504
-  _globals['_SANDBOXLISTRESPONSE']._serialized_end=561
-  _globals['_SANDBOX']._serialized_start=564
-  _globals['_SANDBOX']._serialized_end=735
+  _globals['_SANDBOXCREATERESPONSE']._serialized_end=387
+  _globals['_SANDBOXREQUEST']._serialized_start=389
+  _globals['_SANDBOXREQUEST']._serialized_end=424
+  _globals['_RUNNINGSANDBOX']._serialized_start=426
+  _globals['_RUNNINGSANDBOX']._serialized_end=521
+  _globals['_SANDBOXLISTRESPONSE']._serialized_start=523
+  _globals['_SANDBOXLISTRESPONSE']._serialized_end=580
+  _globals['_SANDBOX']._serialized_start=583
+  _globals['_SANDBOX']._serialized_end=807
 # @@protoc_insertion_point(module_scope)

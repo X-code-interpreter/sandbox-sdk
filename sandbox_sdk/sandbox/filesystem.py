@@ -36,7 +36,7 @@ class FilesystemManager:
     def cwd(self) -> Optional[str]:
         return self._sandbox.cwd
 
-    def read_bytes(self, path: str, timeout: Optional[float] = TIMEOUT) -> bytes:
+    async def read_bytes(self, path: str, timeout: Optional[float] = TIMEOUT) -> bytes:
         """
         Read the whole content of a file as a byte array.
         This can be used when you cannot represent the data as an UTF-8 string.
@@ -46,12 +46,12 @@ class FilesystemManager:
         :return: byte array representing the content of a file
         """
         path = resolve_path(path, self.cwd)
-        result: str = self._sandbox._call(
+        result: str = await self._sandbox._call(
             self._service_name, "readBase64", [path], timeout=timeout
         )
         return base64.b64decode(result)
 
-    def write_bytes(
+    async def write_bytes(
         self, path: str, content: bytes, timeout: Optional[float] = TIMEOUT
     ) -> None:
         """
@@ -67,11 +67,11 @@ class FilesystemManager:
         """
         path = resolve_path(path, self.cwd)
         base64_content = base64.b64encode(content).decode("utf-8")
-        self._sandbox._call(
+        await self._sandbox._call(
             self._service_name, "writeBase64", [path, base64_content], timeout=timeout
         )
 
-    def read(self, path: str, timeout: Optional[float] = TIMEOUT) -> str:
+    async def read(self, path: str, timeout: Optional[float] = TIMEOUT) -> str:
         """
         Read the whole content of a file as an array of bytes.
 
@@ -83,7 +83,7 @@ class FilesystemManager:
 
         path = resolve_path(path, self.cwd)
         try:
-            result: str = self._sandbox._call(
+            result: str = await self._sandbox._call(
                 self._service_name, "read", [path], timeout=timeout
             )
             logger.debug(f"Read file {path}")
@@ -91,9 +91,7 @@ class FilesystemManager:
         except RpcException as e:
             raise FilesystemException(e.message) from e
 
-    def write(
-        self, path: str, content: str, timeout: Optional[float] = TIMEOUT
-    ) -> None:
+    async def write(self, path: str, content: str, timeout: Optional[float] = TIMEOUT) -> None:
         """
         Write content to a file.
 
@@ -108,14 +106,14 @@ class FilesystemManager:
 
         path = resolve_path(path, self.cwd)
         try:
-            self._sandbox._call(
+            await self._sandbox._call(
                 self._service_name, "write", [path, content], timeout=timeout
             )
             logger.debug(f"Wrote file {path}")
         except RpcException as e:
             raise FilesystemException(e.message) from e
 
-    def remove(self, path: str, timeout: Optional[float] = TIMEOUT) -> None:
+    async def remove(self, path: str, timeout: Optional[float] = TIMEOUT) -> None:
         """
         Remove a file or a directory.
 
@@ -126,12 +124,14 @@ class FilesystemManager:
 
         path = resolve_path(path, self.cwd)
         try:
-            self._sandbox._call(self._service_name, "remove", [path], timeout=timeout)
+            await self._sandbox._call(
+                self._service_name, "remove", [path], timeout=timeout
+            )
             logger.debug(f"Removed file {path}")
         except RpcException as e:
             raise FilesystemException(e.message) from e
 
-    def list(self, path: str, timeout: Optional[float] = TIMEOUT) -> List[FileInfo]:
+    async def list(self, path: str, timeout: Optional[float] = TIMEOUT) -> List[FileInfo]:
         """
         List files in a directory.
 
@@ -144,7 +144,7 @@ class FilesystemManager:
 
         path = resolve_path(path, self.cwd)
         try:
-            result: List[Any] = self._sandbox._call(
+            result: List[Any] = await self._sandbox._call(
                 self._service_name, "list", [path], timeout=timeout
             )
             logger.debug(f"Listed files in {path}, result: {result}")
@@ -155,7 +155,7 @@ class FilesystemManager:
         except RpcException as e:
             raise FilesystemException(e.message) from e
 
-    def make_dir(self, path: str, timeout: Optional[float] = TIMEOUT) -> None:
+    async def make_dir(self, path: str, timeout: Optional[float] = TIMEOUT) -> None:
         """
         Create a new directory and all directories along the way if needed on the specified path.
 
@@ -166,7 +166,9 @@ class FilesystemManager:
 
         path = resolve_path(path, self.cwd)
         try:
-            self._sandbox._call(self._service_name, "makeDir", [path], timeout=timeout)
+            await self._sandbox._call(
+                self._service_name, "makeDir", [path], timeout=timeout
+            )
             logger.debug(f"Created directory {path}")
         except RpcException as e:
             raise FilesystemException(e.message) from e

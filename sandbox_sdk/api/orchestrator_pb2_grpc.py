@@ -56,6 +56,11 @@ class SandboxStub(object):
                 request_serializer=orchestrator__pb2.SandboxRequest.SerializeToString,
                 response_deserializer=google_dot_protobuf_dot_empty__pb2.Empty.FromString,
                 _registered_method=True)
+        self.Deactive = channel.unary_unary(
+                '/Sandbox/Deactive',
+                request_serializer=orchestrator__pb2.SandboxRequest.SerializeToString,
+                response_deserializer=google_dot_protobuf_dot_empty__pb2.Empty.FromString,
+                _registered_method=True)
 
 
 class SandboxServicer(object):
@@ -83,6 +88,14 @@ class SandboxServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Deactive(self, request, context):
+        """Invoke memory reclaim for a sandbox **on host**.
+        TODO(huang-jl): Active interface (which needs modification to FC)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_SandboxServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -98,6 +111,11 @@ def add_SandboxServicer_to_server(servicer, server):
             ),
             'Delete': grpc.unary_unary_rpc_method_handler(
                     servicer.Delete,
+                    request_deserializer=orchestrator__pb2.SandboxRequest.FromString,
+                    response_serializer=google_dot_protobuf_dot_empty__pb2.Empty.SerializeToString,
+            ),
+            'Deactive': grpc.unary_unary_rpc_method_handler(
+                    servicer.Deactive,
                     request_deserializer=orchestrator__pb2.SandboxRequest.FromString,
                     response_serializer=google_dot_protobuf_dot_empty__pb2.Empty.SerializeToString,
             ),
@@ -182,6 +200,33 @@ class Sandbox(object):
             request,
             target,
             '/Sandbox/Delete',
+            orchestrator__pb2.SandboxRequest.SerializeToString,
+            google_dot_protobuf_dot_empty__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Deactive(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/Sandbox/Deactive',
             orchestrator__pb2.SandboxRequest.SerializeToString,
             google_dot_protobuf_dot_empty__pb2.Empty.FromString,
             options,

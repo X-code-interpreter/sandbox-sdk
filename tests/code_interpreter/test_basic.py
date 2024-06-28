@@ -1,9 +1,10 @@
 from sandbox_sdk.code_interpreter import CodeInterpreter
-import logging
+from ..utils import asyncio_run
 
 
-def test_basic(caplog):
-    caplog.set_level(logging.DEBUG)
-    with CodeInterpreter() as sandbox:
-        result = sandbox.notebook.exec_cell("x =1; x")
+
+@asyncio_run
+async def test_basic():
+    async with await CodeInterpreter.create() as sandbox:
+        result = await sandbox.notebook.exec_cell("x =1; x")
         assert result.text == "1"
