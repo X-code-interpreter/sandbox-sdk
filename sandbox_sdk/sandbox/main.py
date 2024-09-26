@@ -111,6 +111,8 @@ class Sandbox(SandboxConnection):
             target_addr=target_addr,
         )
         await obj._open(metadata=metadata, timeout=timeout)
+        assert obj._sandbox is not None
+        logger.info(f"sandbox {obj._sandbox.sandbox_id} created")
         return obj
 
     def __init__(
@@ -327,8 +329,9 @@ class Sandbox(SandboxConnection):
         """
         logger.info(f"Opening sandbox {self._template}")
         await super()._open(metadata=metadata, timeout=timeout)
+        assert self._sandbox is not None  # for pyright
+        logger.info(f"Sandbox {self._template} ({self._sandbox.sandbox_id}) opened")
         await self._code_snippet._subscribe()
-        logger.info(f"Sandbox {self._template} opened")
 
         if self.cwd:
             await self.filesystem.make_dir(self.cwd)
@@ -387,15 +390,6 @@ class Sandbox(SandboxConnection):
                     f"Failed to download file '{remote_path}'. {r.reason} {r.text}"
                 )
             return await r.read()
-
-    def deactive(self, timeout: Optional[float] = TIMEOUT):
-        """
-        Demote the memory of the sandbox to lower level (e.g., swap).
-        This can increase the density of sandboxes on the server.
-
-        :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out (default is 60 seconds). If set to None, the method will continue to wait until it completes, regardless of time
-        """
-        pass
 
     async def __aenter__(self):
         return self

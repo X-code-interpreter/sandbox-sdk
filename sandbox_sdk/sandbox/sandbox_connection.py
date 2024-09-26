@@ -1,7 +1,6 @@
 import logging
 import traceback
 import uuid
-import aiohttp
 
 import asyncio
 from typing import Any, Callable, Coroutine, List, Optional, Union, Dict
@@ -93,6 +92,14 @@ class SandboxConnection:
         """
         return self._is_open
 
+    @property
+    def orchestrator_client(self) -> AsyncOrchestratorClient:
+        if self._orchestrator_client is None:
+            self._orchestrator_client = AsyncOrchestratorClient(
+                f"{self._target_addr}:{ORCHESTRATOR_PORT}"
+            )
+        return self._orchestrator_client
+
     def __init__(
         self,
         template: str,
@@ -125,8 +132,7 @@ class SandboxConnection:
         self._secure = secure
         self._sandbox: Optional[SandboxMeta] = None
         self._bg_tasks: List[asyncio.Task] = []
-
-        logger.info(f"Sandbox for template {self._template} initialized")
+        self._orchestrator_client: Optional[AsyncOrchestratorClient] = None
 
     def get_sbx_url(self, port: Optional[int] = None) -> str:
         """
@@ -168,15 +174,20 @@ class SandboxConnection:
         Close the sandbox and unsubscribe from all the subscriptions.
         """
         await self._close()
-        logger.info(f"Sandbox closed")
+        if self._sandbox:
+            logger.info(
+                f"Sandbox {self._sandbox.template_id} (id: {self.id}) closed"
+            )
 
     async def _close(self):
         for t in self._bg_tasks:
             t.cancel()
 
+        if self._orchestrator_client:
+            await self._orchestrator_client.close()
         if self._is_open and self._sandbox:
-            logger.info(
-                f"Closing sandbox {self._sandbox.template_id} (id: {self._sandbox.sandbox_id})"
+            logger.debug(
+                f"Closing sandbox {self._sandbox.template_id} (id: {self.id})"
             )
             self._is_open = False
             if self._rpc:
@@ -210,11 +221,10 @@ class SandboxConnection:
             metadata=metadata,
         )
         try:
-            async with AsyncOrchestratorClient(
-                f"{self._target_addr}:{ORCHESTRATOR_PORT}"
-            ) as client:
-                req = SandboxCreateRequest(sandbox=sandbox_config)
-                res: SandboxCreateResponse = await client.Create(req, timeout=timeout)
+            req = SandboxCreateRequest(sandbox=sandbox_config)
+            res: SandboxCreateResponse = await self.orchestrator_client.Create(
+                req, timeout=timeout
+            )
         except grpc.RpcError as e:
             logger.error(f"failed to create a sandbox: {e}")
             await self._close()
@@ -223,7 +233,6 @@ class SandboxConnection:
             logger.error(f"Failed to acquire sandbox")
             await self._close()
             raise e
-        logger.info(f"Sandbox {self._template} created")
         self._sandbox = SandboxMeta(
             sandbox_id=sandbox_id,
             template_id=sandbox_config.templateID,
@@ -234,12 +243,15 @@ class SandboxConnection:
         )
 
         # TODO(huang-jl): add something like refresh as e2b?
+        logger.debug(f"Sandbox {self._template} created in the backend")
         try:
             await self._connect_rpc(timeout)
         except Exception as e:
             logger.error(f"connect rpc to sandbox failed: {e}")
             await self._close()
             raise SandboxException(f"connect rpc to sandbox failed: {e}") from e
+        else:
+            logger.debug(f"Sandbox {self._template} connected to envd websocket")
 
     async def _connect_rpc(self, timeout: Optional[float] = TIMEOUT):
         if not self._sandbox:
@@ -363,17 +375,17 @@ class SandboxConnection:
             sub.handler(data.params["result"])
 
     async def deactive(self, timeout: Optional[float] = TIMEOUT):
-        """This is a pure background task (e.g., which will be running in a seperate thread).
-        So when this function return, the sandbox might not been deactive yet
+        """
+        Demote the memory of the sandbox to lower level (e.g., swap).
+        This can increase the density of sandboxes on the server.
+
+        :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out (default is 60 seconds). If set to None, the method will continue to wait until it completes, regardless of time
         """
         if not self._is_open or self._sandbox is None:
             raise SandboxNotOpenException("Sandbox is not open")
         try:
-            async with AsyncOrchestratorClient(
-                f"{self._target_addr}:{ORCHESTRATOR_PORT}"
-            ) as client:
-                req = SandboxRequest(sandboxID=self._sandbox.sandbox_id)
-                _ = await client.Deactive(req, timeout=timeout)
+            req = SandboxRequest(sandboxID=self.id)
+            _ = await self.orchestrator_client.Deactive(req, timeout=timeout)
         except grpc.RpcError as e:
             logger.error(f"failed to deactive a sandbox: {e}")
             await self._close()
@@ -382,7 +394,7 @@ class SandboxConnection:
             logger.error(f"Non Rpc Error while deactive: {e}")
             await self._close()
             raise e
-        logger.info(f"Sandbox {self._sandbox.sandbox_id} deactivated")
+        logger.info(f"Sandbox {self.id} deactivated")
 
     @staticmethod
     async def list(target_addr: str = BACKEND_ADDR) -> List[RunningSandbox]:

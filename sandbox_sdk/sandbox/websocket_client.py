@@ -66,10 +66,9 @@ class WebSocket:
             else:
                 break
 
-        logger.info(f"WebSocket connected to {self.url}, totally tried {tried} times")
+        logger.debug(f"WebSocket connected to {self.url}, totally tried {tried} times")
 
     async def close(self):
         if self._ws:
-            logging.debug(f"closing websocket (url: {self.url})")
             await self._ws.close()
-            logging.debug(f"websocket (url: {self.url}) closed")
+            logger.debug(f"websocket (url: {self.url}) closed")
