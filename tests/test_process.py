@@ -108,8 +108,8 @@ async def test_process_default_on_stdout_stderr():
     on_stderr = MagicMock()
 
     sandbox = await Sandbox.create(
-        on_stdout=lambda data: on_stdout(),
-        on_stderr=lambda data: on_stderr(),
+        on_stdout=lambda data: on_stdout(data),
+        on_stderr=lambda data: on_stderr(data),
     )
     code = "python -c \"print('Hello world'); raise Exception('Error!')\""
 

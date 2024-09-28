@@ -291,7 +291,7 @@ class SandboxConnection:
         """
         The returned coroutine need to be await in order to unsubscribe
         """
-        results: List[Union[Callable, Exception]] = []
+        results: List[Union[Coroutine[Any, Any, None], Exception]] = []
         tasks = []
         for args in subscription_args:
             fut = self._subscribe(args.service, args.handler, args.method, *args.params)

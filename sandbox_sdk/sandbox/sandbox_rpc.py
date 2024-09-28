@@ -150,7 +150,12 @@ class SandboxRpc(BaseModel):
                 )
                 return
         elif isinstance(message, Notification):
-            self.on_message(message)
+            # TODO(huang-jl): on_message might trigger exception
+            # which might in turn influence the process_message coroutine
+            try:
+                self.on_message(message)
+            except BaseException:
+                logger.exception(f"error when handle notification of method {message.method}")
 
     async def close(self):
         for id in self._waiting_for_replies:
