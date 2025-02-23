@@ -20,6 +20,18 @@ aiohttp = "^3.9.5"
 pytest = "^8.2.2"
 pytest-env = "^1.1.3"
 
+[tool.poetry.group.autogen]
+optional = true
+
+[tool.poetry.group.autogen.dependencies]
+autogen-agentchat = {path="../autogen", develop = true, python = "<3.13"}
+
+
+[[tool.poetry.source]]
+name = "mirrors"
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+priority = "primary"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

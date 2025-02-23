@@ -45,6 +45,7 @@ class WebSocket:
             max_size=None,
             max_queue=None,
             logger=ws_logger,
+            ping_timeout=None,
             close_timeout=5,
         )
 

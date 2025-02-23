@@ -42,6 +42,8 @@ class Sandbox(SandboxConnection):
     These cloud sandboxes are meant to be used for agents. Like a sandboxed playgrounds, where the agent can do whatever it wants.
     """
 
+    template = "default-sandbox"
+
     @property
     def process(self) -> ProcessManager:
         """
@@ -66,7 +68,7 @@ class Sandbox(SandboxConnection):
     @classmethod
     async def create(
         cls,
-        template: str = "default-sandbox",
+        template: Optional[str] = None,
         cwd: Optional[str] = None,
         env_vars: Optional[EnvVars] = None,
         on_scan_ports: Optional[Callable[[List[OpenPort]], Any]] = None,
@@ -80,10 +82,10 @@ class Sandbox(SandboxConnection):
         """
         Create a new cloud sandbox.
 
-        :param template: ID of the sandbox template or the name of prepared template. If not specified a 'base' template will be used.
+        :param template: ID of the sandbox template or the name of prepared template. If not specified a 'default-sandbox' template will be used.
         Can be one of the following premade sandbox templates or a custom sandbox template ID:
-        - `base` - A basic sandbox with a Linux environment
-        - `Python3-DataAnalysis` - A Python3 sandbox with data analysis tools
+        - `default-sandbox` - A basic sandbox with a Linux environment
+        - `default-code-interpreter` - A Python3 sandbox with data analysis tools
 
 
         :param api_key: The API key to use, if not provided, the `E2B_API_KEY` environment variable is used
@@ -97,6 +99,7 @@ class Sandbox(SandboxConnection):
         :param timeout: Timeout for sandbox to initialize in seconds, default is 60 seconds
         :param target_addr: The address to use for the API
         """
+        template = template or cls.template
         logger.info(
             f"Creating sandbox {template if isinstance(template, str) else type(template)}"
         )

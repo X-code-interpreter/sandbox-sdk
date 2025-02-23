@@ -400,4 +400,4 @@ class ProcessManager:
             process_id=process_id,
             timeout=timeout,
         )
-        return await p.wait()
+        return await p.wait(timeout=timeout)
