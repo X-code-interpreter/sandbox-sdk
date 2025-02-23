@@ -191,6 +191,7 @@ class JupyterExtension:
         kernel_id = kernel_id or self.default_kernel_id
         logger.debug(f"Restarting kernel {kernel_id}")
 
+        # the kernel_id must in self._connected_kernels
         ws = await self._connected_kernels[kernel_id]
         await ws.close()
         del self._connected_kernels[kernel_id]
@@ -246,6 +247,19 @@ class JupyterExtension:
             if not response.ok:
                 raise KernelException(f"Failed to list kernels: {response.text}")
             return [kernel["id"] for kernel in await response.json()]
+
+    async def interrupt_kernel(
+        self, kernel_id: Optional[str] = None, timeout: float = TIMEOUT
+    ):
+        kernel_id = kernel_id or self._default_kernel_id
+        logger.debug(f"interrupt kernel {kernel_id}")
+        async with self._http_client.post(
+            f"{self._sandbox.get_protocol()}://{self._sandbox.get_sbx_url(8888)}/api/kernels/{kernel_id}/interrupt",
+            timeout=timeout,
+        ) as response:
+            if not response.ok:
+                raise KernelException(f"Failed to interrupt kernel {kernel_id}")
+        logger.debug(f"Interrupted kernel {kernel_id}")
 
     async def close(self):
         """
