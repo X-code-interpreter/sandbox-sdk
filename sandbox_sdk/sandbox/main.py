@@ -14,6 +14,7 @@ from sandbox_sdk.sandbox.filesystem import FilesystemManager
 from sandbox_sdk.sandbox.process import ProcessManager, ProcessMessage
 from sandbox_sdk.sandbox.sandbox_connection import SandboxConnection
 from sandbox_sdk.sandbox.terminal import TerminalManager
+from sandbox_sdk.sandbox.simple_process import SimpleProcessManager
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,13 @@ class Sandbox(SandboxConnection):
         Filesystem manager used to manage files.
         """
         return self._filesystem
+
+    @property
+    def simple_process(self) -> SimpleProcessManager:
+        """
+        Simple process manager used to run command and involve minimal overhead for sandbox.
+        """
+        return self._simple_process
 
     @classmethod
     async def create(
@@ -150,6 +158,7 @@ class Sandbox(SandboxConnection):
             on_stderr=on_stderr,
             on_exit=on_exit,
         )
+        self._simple_process = SimpleProcessManager(sandbox=self)
         super().__init__(
             template=template,
             cwd=cwd,
@@ -366,8 +375,9 @@ class Sandbox(SandboxConnection):
         :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out (default is 60 seconds). If set to None, the method will continue to wait until it completes, regardless of time
         """
         files = {"file": file}
+        client_timeout = aiohttp.ClientTimeout(total=timeout)
         async with self._http_client.post(
-            self.file_url(), data=files, timeout=timeout
+            self.file_url(), data=files, timeout=client_timeout
         ) as r:
             if r.status != 200:
                 text = await r.text()
@@ -387,7 +397,8 @@ class Sandbox(SandboxConnection):
         """
         encoded_path = urllib.parse.quote(remote_path)
         url = f"{self.file_url()}?path={encoded_path}"
-        async with self._http_client.get(url, timeout=timeout) as r:
+        client_timeout = aiohttp.ClientTimeout(total=timeout)
+        async with self._http_client.get(url, timeout=client_timeout) as r:
             if r.status != 200:
                 raise Exception(
                     f"Failed to download file '{remote_path}'. {r.reason} {r.text}"
@@ -400,6 +411,7 @@ class Sandbox(SandboxConnection):
     async def close(self):
         await super().close()
         await self._http_client.close()
+        await self.simple_process.close()
 
     async def __aexit__(self, exc_type, exc_value, traceback):
         await self.close()
