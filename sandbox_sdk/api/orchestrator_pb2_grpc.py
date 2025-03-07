@@ -6,10 +6,8 @@ import warnings
 from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
 from . import orchestrator_pb2 as orchestrator__pb2
 
-GRPC_GENERATED_VERSION = '1.64.1'
+GRPC_GENERATED_VERSION = '1.67.1'
 GRPC_VERSION = grpc.__version__
-EXPECTED_ERROR_RELEASE = '1.65.0'
-SCHEDULED_RELEASE_DATE = 'June 25, 2024'
 _version_not_supported = False
 
 try:
@@ -19,15 +17,12 @@ except ImportError:
     _version_not_supported = True
 
 if _version_not_supported:
-    warnings.warn(
+    raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
         + f' but the generated code in orchestrator_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
-        + f' This warning will become an error in {EXPECTED_ERROR_RELEASE},'
-        + f' scheduled for release on {SCHEDULED_RELEASE_DATE}.',
-        RuntimeWarning
     )
 
 
@@ -48,7 +43,7 @@ class SandboxStub(object):
                 _registered_method=True)
         self.List = channel.unary_unary(
                 '/Sandbox/List',
-                request_serializer=google_dot_protobuf_dot_empty__pb2.Empty.SerializeToString,
+                request_serializer=orchestrator__pb2.SandboxListRequest.SerializeToString,
                 response_deserializer=orchestrator__pb2.SandboxListResponse.FromString,
                 _registered_method=True)
         self.Delete = channel.unary_unary(
@@ -60,6 +55,16 @@ class SandboxStub(object):
                 '/Sandbox/Deactive',
                 request_serializer=orchestrator__pb2.SandboxRequest.SerializeToString,
                 response_deserializer=google_dot_protobuf_dot_empty__pb2.Empty.FromString,
+                _registered_method=True)
+        self.Search = channel.unary_unary(
+                '/Sandbox/Search',
+                request_serializer=orchestrator__pb2.SandboxRequest.SerializeToString,
+                response_deserializer=orchestrator__pb2.SandboxSearchResponse.FromString,
+                _registered_method=True)
+        self.Purge = channel.unary_unary(
+                '/Sandbox/Purge',
+                request_serializer=orchestrator__pb2.SandboxPurgeRequest.SerializeToString,
+                response_deserializer=orchestrator__pb2.SandboxPurgeResponse.FromString,
                 _registered_method=True)
 
 
@@ -96,6 +101,22 @@ class SandboxServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Search(self, request, context):
+        """search a sandbox with id
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Purge(self, request, context):
+        """Purge will be invoked in rare case. typically when orchestrator crashes
+        and forget to cleanup the sandbox. So the client can call this method
+        to purge the orphan sandbox manually
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_SandboxServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -106,7 +127,7 @@ def add_SandboxServicer_to_server(servicer, server):
             ),
             'List': grpc.unary_unary_rpc_method_handler(
                     servicer.List,
-                    request_deserializer=google_dot_protobuf_dot_empty__pb2.Empty.FromString,
+                    request_deserializer=orchestrator__pb2.SandboxListRequest.FromString,
                     response_serializer=orchestrator__pb2.SandboxListResponse.SerializeToString,
             ),
             'Delete': grpc.unary_unary_rpc_method_handler(
@@ -118,6 +139,16 @@ def add_SandboxServicer_to_server(servicer, server):
                     servicer.Deactive,
                     request_deserializer=orchestrator__pb2.SandboxRequest.FromString,
                     response_serializer=google_dot_protobuf_dot_empty__pb2.Empty.SerializeToString,
+            ),
+            'Search': grpc.unary_unary_rpc_method_handler(
+                    servicer.Search,
+                    request_deserializer=orchestrator__pb2.SandboxRequest.FromString,
+                    response_serializer=orchestrator__pb2.SandboxSearchResponse.SerializeToString,
+            ),
+            'Purge': grpc.unary_unary_rpc_method_handler(
+                    servicer.Purge,
+                    request_deserializer=orchestrator__pb2.SandboxPurgeRequest.FromString,
+                    response_serializer=orchestrator__pb2.SandboxPurgeResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -173,7 +204,7 @@ class Sandbox(object):
             request,
             target,
             '/Sandbox/List',
-            google_dot_protobuf_dot_empty__pb2.Empty.SerializeToString,
+            orchestrator__pb2.SandboxListRequest.SerializeToString,
             orchestrator__pb2.SandboxListResponse.FromString,
             options,
             channel_credentials,
@@ -229,6 +260,60 @@ class Sandbox(object):
             '/Sandbox/Deactive',
             orchestrator__pb2.SandboxRequest.SerializeToString,
             google_dot_protobuf_dot_empty__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Search(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/Sandbox/Search',
+            orchestrator__pb2.SandboxRequest.SerializeToString,
+            orchestrator__pb2.SandboxSearchResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Purge(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/Sandbox/Purge',
+            orchestrator__pb2.SandboxPurgeRequest.SerializeToString,
+            orchestrator__pb2.SandboxPurgeResponse.FromString,
             options,
             channel_credentials,
             insecure,

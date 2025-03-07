@@ -25,7 +25,6 @@ from sandbox_sdk.constants import (
     WS_ROUTE,
     SECURE,
     ORCHESTRATOR_PORT,
-    GUEST_KERNEL_VERSION,
 )
 from sandbox_sdk.sandbox.env_vars import EnvVars
 from sandbox_sdk.sandbox.exception import (
@@ -175,9 +174,7 @@ class SandboxConnection:
         """
         await self._close()
         if self._sandbox:
-            logger.info(
-                f"Sandbox {self._sandbox.template_id} (id: {self.id}) closed"
-            )
+            logger.info(f"Sandbox {self._sandbox.template_id} (id: {self.id}) closed")
 
     async def _close(self):
         for t in self._bg_tasks:
@@ -186,9 +183,7 @@ class SandboxConnection:
         if self._orchestrator_client:
             await self._orchestrator_client.close()
         if self._is_open and self._sandbox:
-            logger.debug(
-                f"Closing sandbox {self._sandbox.template_id} (id: {self.id})"
-            )
+            logger.debug(f"Closing sandbox {self._sandbox.template_id} (id: {self.id})")
             self._is_open = False
             if self._rpc:
                 await self._rpc.close()
@@ -215,7 +210,7 @@ class SandboxConnection:
         sandbox_id = str(uuid.uuid4())
         sandbox_config = SandboxConfig(
             templateID=self._template,
-            kernelVersion=GUEST_KERNEL_VERSION,
+            # TODO(huang-jl): Utilize this option
             maxInstanceLength=3,
             sandboxID=sandbox_id,
             metadata=metadata,
@@ -235,11 +230,11 @@ class SandboxConnection:
             raise e
         self._sandbox = SandboxMeta(
             sandbox_id=sandbox_id,
-            template_id=sandbox_config.templateID,
-            kernel_version=sandbox_config.kernelVersion,
+            template_id=res.info.templateID,
+            kernel_version=res.info.kernelVersion,
             metadata=metadata if metadata else {},
             max_instance_length=sandbox_config.maxInstanceLength,
-            private_ip=res.privateIP,
+            private_ip=res.info.privateIP,
         )
 
         # TODO(huang-jl): add something like refresh as e2b?
@@ -412,10 +407,10 @@ class SandboxConnection:
             res: SandboxListResponse = await orchestrator_client.List(req)
             return [
                 RunningSandbox(
-                    sandbox_id=sbx.config.sandboxID,
-                    template_id=sbx.config.templateID,
+                    sandbox_id=sbx.sandboxID,
+                    template_id=sbx.templateID,
                     started_at=sbx.startTime.ToDatetime(),
-                    metadata=dict(sbx.config.metadata),
+                    metadata=dict(sbx.metadata),
                 )
                 for sbx in res.sandboxes
             ]
