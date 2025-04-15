@@ -12,10 +12,12 @@ from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
 from sandbox_sdk.api import (
     AsyncOrchestratorClient,
     SandboxCreateRequest,
-    SandboxConfig,
     SandboxListResponse,
-    SandboxRequest,
+    SandboxDeactivateRequest,
+    SandboxDeleteRequest,
     SandboxCreateResponse,
+    SandboxSnapshotRequest,
+    SandboxSnapshotResponse,
 )
 from sandbox_sdk.constants import (
     BACKEND_ADDR,
@@ -45,6 +47,7 @@ class SandboxMeta(BaseModel):
     max_instance_length: int
     metadata: dict[str, str]
     private_ip: str
+    enable_diff_snapshot: bool
 
 
 class Subscription(BaseModel):
@@ -196,6 +199,8 @@ class SandboxConnection:
         self,
         metadata: Optional[Dict[str, str]] = None,
         timeout: Optional[float] = TIMEOUT,
+        connect_rpc: bool = True,
+        enable_diff_snapshot: bool = False,
     ) -> None:
         """
         Open a connection to a new sandbox.
@@ -208,15 +213,15 @@ class SandboxConnection:
             self._is_open = True
 
         sandbox_id = str(uuid.uuid4())
-        sandbox_config = SandboxConfig(
+        req = SandboxCreateRequest(
             templateID=self._template,
             # TODO(huang-jl): Utilize this option
             maxInstanceLength=3,
             sandboxID=sandbox_id,
+            enableDiffSnapshots=enable_diff_snapshot,
             metadata=metadata,
         )
         try:
-            req = SandboxCreateRequest(sandbox=sandbox_config)
             res: SandboxCreateResponse = await self.orchestrator_client.Create(
                 req, timeout=timeout
             )
@@ -233,18 +238,24 @@ class SandboxConnection:
             template_id=res.info.templateID,
             kernel_version=res.info.kernelVersion,
             metadata=metadata if metadata else {},
-            max_instance_length=sandbox_config.maxInstanceLength,
+            max_instance_length=req.maxInstanceLength,
             private_ip=res.info.privateIP,
+            enable_diff_snapshot=res.info.enableDiffSnapshots,
         )
-
         # TODO(huang-jl): add something like refresh as e2b?
         logger.debug(f"Sandbox {self._template} created in the backend")
+
+        if not connect_rpc:
+            return
+
         try:
             await self._connect_rpc(timeout)
         except Exception as e:
-            logger.error(f"connect rpc to sandbox failed: {e}")
+            logger.error(f"connect rpc to sandbox {self.id} failed: {e}")
             await self._close()
-            raise SandboxException(f"connect rpc to sandbox failed: {e}") from e
+            raise SandboxException(
+                f"connect rpc to sandbox {self.id} failed: {e}"
+            ) from e
         else:
             logger.debug(f"Sandbox {self._template} connected to envd websocket")
 
@@ -379,7 +390,7 @@ class SandboxConnection:
         if not self._is_open or self._sandbox is None:
             raise SandboxNotOpenException("Sandbox is not open")
         try:
-            req = SandboxRequest(sandboxID=self.id)
+            req = SandboxDeactivateRequest(sandboxID=self.id)
             _ = await self.orchestrator_client.Deactive(req, timeout=timeout)
         except grpc.RpcError as e:
             logger.error(f"failed to deactive a sandbox: {e}")
@@ -428,5 +439,34 @@ class SandboxConnection:
         async with AsyncOrchestratorClient(
             f"{target_addr}:{ORCHESTRATOR_PORT}"
         ) as orchestrator_client:
-            reqpc = SandboxRequest(sandboxID=sandbox_id)
+            reqpc = SandboxDeleteRequest(sandboxID=sandbox_id)
             _ = await orchestrator_client.Delete(reqpc)
+
+    async def snapshot(
+        self, delete: bool = False, timeout: Optional[float] = TIMEOUT
+    ) -> SandboxSnapshotResponse:
+        """
+        Take the snapshot of the running vm.
+
+        :param delete: Whether delete the sandbox after generating snapshot, if set to True, the sandbox will be delete and close afterwards.
+        :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out (default is 60 seconds). If set to None, the method will continue to wait until it completes, regardless of time
+        """
+        if not self._is_open or self._sandbox is None:
+            raise SandboxNotOpenException("Sandbox is not open")
+        try:
+            req = SandboxSnapshotRequest(sandboxID=self.id, delete=delete)
+            response: SandboxSnapshotResponse = await self.orchestrator_client.Snapshot(
+                req, timeout=timeout
+            )
+        except grpc.RpcError as e:
+            logger.error(f"failed to snapshot a sandbox: {e}")
+            await self._close()
+            raise e
+        except Exception as e:
+            logger.error(f"Non Rpc Error while snapshot: {e}")
+            await self._close()
+            raise e
+        logger.info(f"Sandbox {self.id} snapshotted: {response.path}")
+        if delete:
+            await self.close()
+        return response

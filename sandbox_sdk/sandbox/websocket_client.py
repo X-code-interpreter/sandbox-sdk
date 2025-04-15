@@ -54,7 +54,7 @@ class WebSocket:
         websocket_connector.BACKOFF_INITIAL = 0.2  # type: ignore
 
         tried = 0
-        retry_sleep_time = [0.5, 1, 5]
+        retry_sleep_time = [2, 5, 10]
         while True:
             try:
                 self._ws = await websocket_connector

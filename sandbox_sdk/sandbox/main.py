@@ -86,6 +86,8 @@ class Sandbox(SandboxConnection):
         metadata: Optional[Dict[str, str]] = None,
         timeout: Optional[float] = TIMEOUT,
         target_addr: str = BACKEND_ADDR,
+        connect_rpc: bool = True,
+        enable_diff_snapshot: bool = False,
     ):
         """
         Create a new cloud sandbox.
@@ -106,6 +108,8 @@ class Sandbox(SandboxConnection):
         :param metadata: A dictionary of strings that is stored alongside the running sandbox. You can see this metadata when you list running sandboxes.
         :param timeout: Timeout for sandbox to initialize in seconds, default is 60 seconds
         :param target_addr: The address to use for the API
+        :param connect_rpc: Whether connect rpc(SandboxRpc) or not
+        :param enable_diff_snapshot: Whether enable diff snapshot on sandbox
         """
         template = template or cls.template
         logger.info(
@@ -121,7 +125,12 @@ class Sandbox(SandboxConnection):
             on_exit=on_exit,
             target_addr=target_addr,
         )
-        await obj._open(metadata=metadata, timeout=timeout)
+        await obj._open(
+            metadata=metadata,
+            timeout=timeout,
+            connect_rpc=connect_rpc,
+            enable_diff_snapshot=enable_diff_snapshot,
+        )
         assert obj._sandbox is not None
         logger.info(f"sandbox {obj._sandbox.sandbox_id} created")
         return obj
@@ -333,6 +342,8 @@ class Sandbox(SandboxConnection):
         self,
         metadata: Optional[Dict[str, str]] = None,
         timeout: Optional[float] = TIMEOUT,
+        connect_rpc: bool = True,
+        enable_diff_snapshot: bool = False,
     ) -> None:
         """
         Open the sandbox.
@@ -340,7 +351,12 @@ class Sandbox(SandboxConnection):
         :param timeout: Specify the duration, in seconds to give the method to finish its execution before it times out (default is 60 seconds). If set to None, the method will continue to wait until it completes, regardless of time
         """
         logger.info(f"Opening sandbox {self._template}")
-        await super()._open(metadata=metadata, timeout=timeout)
+        await super()._open(
+            metadata=metadata,
+            timeout=timeout,
+            connect_rpc=connect_rpc,
+            enable_diff_snapshot=enable_diff_snapshot,
+        )
         assert self._sandbox is not None  # for pyright
         logger.info(f"Sandbox {self._template} ({self._sandbox.sandbox_id}) opened")
         await self._code_snippet._subscribe()

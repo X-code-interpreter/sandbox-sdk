@@ -48,17 +48,22 @@ class SandboxStub(object):
                 _registered_method=True)
         self.Delete = channel.unary_unary(
                 '/Sandbox/Delete',
-                request_serializer=orchestrator__pb2.SandboxRequest.SerializeToString,
+                request_serializer=orchestrator__pb2.SandboxDeleteRequest.SerializeToString,
                 response_deserializer=google_dot_protobuf_dot_empty__pb2.Empty.FromString,
                 _registered_method=True)
         self.Deactive = channel.unary_unary(
                 '/Sandbox/Deactive',
-                request_serializer=orchestrator__pb2.SandboxRequest.SerializeToString,
+                request_serializer=orchestrator__pb2.SandboxDeactivateRequest.SerializeToString,
                 response_deserializer=google_dot_protobuf_dot_empty__pb2.Empty.FromString,
+                _registered_method=True)
+        self.Snapshot = channel.unary_unary(
+                '/Sandbox/Snapshot',
+                request_serializer=orchestrator__pb2.SandboxSnapshotRequest.SerializeToString,
+                response_deserializer=orchestrator__pb2.SandboxSnapshotResponse.FromString,
                 _registered_method=True)
         self.Search = channel.unary_unary(
                 '/Sandbox/Search',
-                request_serializer=orchestrator__pb2.SandboxRequest.SerializeToString,
+                request_serializer=orchestrator__pb2.SandboxSearchRequest.SerializeToString,
                 response_deserializer=orchestrator__pb2.SandboxSearchResponse.FromString,
                 _registered_method=True)
         self.Purge = channel.unary_unary(
@@ -101,6 +106,13 @@ class SandboxServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Snapshot(self, request, context):
+        """Snapshot a sandbox with id
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def Search(self, request, context):
         """search a sandbox with id
         """
@@ -132,17 +144,22 @@ def add_SandboxServicer_to_server(servicer, server):
             ),
             'Delete': grpc.unary_unary_rpc_method_handler(
                     servicer.Delete,
-                    request_deserializer=orchestrator__pb2.SandboxRequest.FromString,
+                    request_deserializer=orchestrator__pb2.SandboxDeleteRequest.FromString,
                     response_serializer=google_dot_protobuf_dot_empty__pb2.Empty.SerializeToString,
             ),
             'Deactive': grpc.unary_unary_rpc_method_handler(
                     servicer.Deactive,
-                    request_deserializer=orchestrator__pb2.SandboxRequest.FromString,
+                    request_deserializer=orchestrator__pb2.SandboxDeactivateRequest.FromString,
                     response_serializer=google_dot_protobuf_dot_empty__pb2.Empty.SerializeToString,
+            ),
+            'Snapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.Snapshot,
+                    request_deserializer=orchestrator__pb2.SandboxSnapshotRequest.FromString,
+                    response_serializer=orchestrator__pb2.SandboxSnapshotResponse.SerializeToString,
             ),
             'Search': grpc.unary_unary_rpc_method_handler(
                     servicer.Search,
-                    request_deserializer=orchestrator__pb2.SandboxRequest.FromString,
+                    request_deserializer=orchestrator__pb2.SandboxSearchRequest.FromString,
                     response_serializer=orchestrator__pb2.SandboxSearchResponse.SerializeToString,
             ),
             'Purge': grpc.unary_unary_rpc_method_handler(
@@ -231,7 +248,7 @@ class Sandbox(object):
             request,
             target,
             '/Sandbox/Delete',
-            orchestrator__pb2.SandboxRequest.SerializeToString,
+            orchestrator__pb2.SandboxDeleteRequest.SerializeToString,
             google_dot_protobuf_dot_empty__pb2.Empty.FromString,
             options,
             channel_credentials,
@@ -258,8 +275,35 @@ class Sandbox(object):
             request,
             target,
             '/Sandbox/Deactive',
-            orchestrator__pb2.SandboxRequest.SerializeToString,
+            orchestrator__pb2.SandboxDeactivateRequest.SerializeToString,
             google_dot_protobuf_dot_empty__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Snapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/Sandbox/Snapshot',
+            orchestrator__pb2.SandboxSnapshotRequest.SerializeToString,
+            orchestrator__pb2.SandboxSnapshotResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -285,7 +329,7 @@ class Sandbox(object):
             request,
             target,
             '/Sandbox/Search',
-            orchestrator__pb2.SandboxRequest.SerializeToString,
+            orchestrator__pb2.SandboxSearchRequest.SerializeToString,
             orchestrator__pb2.SandboxSearchResponse.FromString,
             options,
             channel_credentials,
